@@ -3,7 +3,7 @@
 A framework for adversarial machine translation generation and evaluation.
 
 ---
-<img src="imgs/architecture.png" alt="Architecture" width="80%">
+<img src="imgs/Architecture.png" alt="Architecture" width="80%">
 
 ## Overview
 
