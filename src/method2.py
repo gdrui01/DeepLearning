@@ -30,7 +30,7 @@ def main():
     if not seeds:
         raise SystemExit(f"No sentences found in {args.seeds}")
 
-    gen = EditGenerator()
+    gen = EditGenerator() # The model that generates the edits
     mt = MTEnDe()
     qe = COMETQE()
     vf = LMVerifier()

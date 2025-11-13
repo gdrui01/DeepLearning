@@ -28,7 +28,7 @@ class EditGenerator:
         """
         Given seeds and an instruction, produce edited sentences.
         """
-        prompts = [f"{instruction}\n\n'{s}'\n\nRewrite it as one grammatical English sentence." for s in seeds]
+        prompts = [f"{instruction}\n\n'{s}'\n\nRewrite it as one grammatical English sentence. Output only the edited sentence, no other text." for s in seeds]
         enc = self.tok(prompts, return_tensors="pt", padding=True, truncation=True).to(self.device)
         out = self.model.generate(**enc,
                                   do_sample=True,
