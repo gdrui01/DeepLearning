@@ -16,8 +16,8 @@ from .losses import method2_loss
 
 DEFAULT_BASE = "gpt2"
 DEFAULT_INSTRUCTION = (
-    "Make the following sentence harder to translate while keeping it grammatical and natural.\n\n"
-    "'{seed}'\n\nRewrite it as one grammatical English sentence."
+    "Make the following sentence harder to translate while keeping it grammatically correct and natural.\n\n"
+    "'{seed}'\n\nRewrite it as one grammatical English sentence. Output only the edited sentence, no other text."
 )
 
 
@@ -76,7 +76,7 @@ def main():
     ap.add_argument("--x", type=float, default=1.0)
     ap.add_argument("--y", type=float, default=0.3)
     ap.add_argument("--z", type=float, default=0.3)
-    ap.add_argument("--f", type=str, default="relu", choices=["relu","sigmoid","none"])
+    ap.add_argument("--f", type=str, default="none", choices=["relu","sigmoid","none"])
     ap.add_argument("--seed", type=int, default=42)
     args = ap.parse_args()
 
@@ -92,7 +92,7 @@ def main():
 
     # ---- external scorers ----
     mt = MTEnDe()
-    qe = COMETQE()            # wmt21-comet-qe-da (reference-free)
+    qe = COMETQE()            # wmt22-cometkiwi-da (reference-free)
     vf = LMVerifier()
 
     # Precompute de_old once (1 - QE(s0, t0))
