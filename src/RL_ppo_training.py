@@ -250,28 +250,29 @@ def main():
         min_reward = min(rewards_list)
         max_reward = max(rewards_list)
 
-        # Extract PPO stats
-        ppo_loss = stats.get('ppo/loss/total', 0.0) if isinstance(stats, dict) else 0.0
-        kl_div = stats.get('objective/kl', 0.0) if isinstance(stats, dict) else 0.0
-        entropy = stats.get('objective/entropy', 0.0) if isinstance(stats, dict) else 0.0
-        approx_kl = stats.get('objective/kl_coef', 0.0) if isinstance(stats, dict) else 0.0
-
         # Compute response length statistics
         response_lengths = [len(r) for r in response_tensors]
         mean_response_len = sum(response_lengths) / len(response_lengths)
 
+        # Prepare wandb logging dict with rewards and generation stats
+        log_dict = {
+            "reward/mean": mean_reward,
+            "reward/min": min_reward,
+            "reward/max": max_reward,
+            "generation/mean_response_length": mean_response_len,
+            "generation/sample_text": wandb.Html(f"<pre>{cleaned[0]}</pre>"),
+        }
+
+        # Add all PPO stats from trainer - they come with their own prefixes
+        if isinstance(stats, dict):
+            log_dict.update(stats)
+
         if use_wandb:
-            wandb.log({
-                "reward/mean": mean_reward,
-                "reward/min": min_reward,
-                "reward/max": max_reward,
-                "ppo/loss": ppo_loss,
-                "ppo/kl_divergence": kl_div,
-                "ppo/entropy": entropy,
-                "ppo/kl_coef": approx_kl,
-                "generation/mean_response_length": mean_response_len,
-                "generation/sample_text": wandb.Html(f"<pre>{cleaned[0]}</pre>"),
-            }, step=step)
+            wandb.log(log_dict, step=step)
+
+        # Extract specific stats for console logging
+        ppo_loss = stats.get('ppo/loss/total', stats.get('loss', 0.0)) if isinstance(stats, dict) else 0.0
+        kl_div = stats.get('objective/kl', 0.0) if isinstance(stats, dict) else 0.0
 
         # Log statistics periodically to console
         if (step + 1) % 10 == 0:
