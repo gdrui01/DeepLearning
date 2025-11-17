@@ -16,8 +16,8 @@ mkdir -p logs
 # Run model comparison: gpt2 vs google/flan-t5-small
 python verify_gpt2_generation.py \
   --compare \
-  --compare_models gpt2 google/flan-t5-small \
-  --seed_sentence "The dog ran fast." \
+  --compare_models google/flan-t5-base facebook/opt-iml-1.3b \
+  --seed_sentence "They walked on towards the park's entrance." \
   --num_samples 3 \
   --max_new_tokens 40 \
   --temperature 0.9 \
