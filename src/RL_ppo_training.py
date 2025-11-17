@@ -105,7 +105,7 @@ def main():
                 "base_model": args.base_model,
                 "steps": args.steps,
                 "batch_size": args.batch_size,
-                "learning_rate": 5e-6,
+                "learning_rate": 1e-4,
                 "gen_max_new_tokens": args.gen_max_new_tokens,
                 "top_p": args.top_p,
                 "temperature": args.temperature,
@@ -186,6 +186,7 @@ def main():
         top_p=args.top_p,
         temperature=args.temperature,
         max_new_tokens=args.gen_max_new_tokens,
+        min_new_tokens=2,  # Ensure at least 2 tokens to avoid masking issues
         pad_token_id=tok.pad_token_id,
         eos_token_id=tok.eos_token_id,
     )
@@ -212,12 +213,22 @@ def main():
                 # For seq2seq, the output is already just the response
                 response = gen_output.squeeze()
 
-                # Handle empty responses - regenerate with higher temperature or use fallback
-                if len(response) == 0:
+                # Handle empty or very short responses - regenerate with higher temperature or use fallback
+                # Need at least 2 tokens to avoid masking issues in PPO trainer
+                max_retries = 3
+                retry_count = 0
+                while len(response) < 2 and retry_count < max_retries:
                     # Generate at least something with higher temperature
-                    fallback_kwargs = {**gen_kwargs, "temperature": 1.0, "min_new_tokens": 5}
+                    fallback_kwargs = {**gen_kwargs, "temperature": min(1.5 + retry_count * 0.2, 2.0), "min_new_tokens": 5}
                     gen_output = trainer.generate(query, **fallback_kwargs)
                     response = gen_output.squeeze()
+                    retry_count += 1
+
+                # If still too short after retries, create a minimal valid response
+                if len(response) < 2:
+                    # Create a minimal response with at least 2 tokens
+                    fallback_text = "The sentence is difficult."
+                    response = tok(fallback_text, return_tensors="pt").input_ids.squeeze(0).to(trainer.accelerator.device)
 
                 response_tensors.append(response)
 
