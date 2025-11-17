@@ -262,7 +262,6 @@ def main():
 
         if use_wandb:
             wandb.log({
-                "step": step + 1,
                 "reward/mean": mean_reward,
                 "reward/min": min_reward,
                 "reward/max": max_reward,
@@ -272,7 +271,7 @@ def main():
                 "ppo/kl_coef": approx_kl,
                 "generation/mean_response_length": mean_response_len,
                 "generation/sample_text": wandb.Html(f"<pre>{cleaned[0]}</pre>"),
-            })
+            }, step=step)
 
         # Log statistics periodically to console
         if (step + 1) % 10 == 0:
