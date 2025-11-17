@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# SBATCH --account=deep_learning
-# SBATCH --output=logs/mtbreaker_%j.out
-# SBATCH --time=10:00
+#SBATCH --account=deep_learning
+#SBATCH --output=logs/mtbreaker_%j.out
+#SBATCH --time=10:00
 
 . /etc/profile.d/modules.sh
 module add cuda/12.1
