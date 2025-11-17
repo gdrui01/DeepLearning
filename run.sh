@@ -3,6 +3,8 @@
 #SBATCH --account=deep_learning
 #SBATCH --output=logs/mtbreaker_%j.out
 #SBATCH --time=10:00
+#SBATCH --job-name=setup-RL
+#SBATCH --gpus 1080ti:1
 
 . /etc/profile.d/modules.sh
 module add cuda/12.1
