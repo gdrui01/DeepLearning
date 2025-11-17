@@ -2,6 +2,7 @@ import os, argparse, random
 from dataclasses import dataclass
 from typing import List
 
+import numpy as np
 import torch
 from tqdm import trange
 import wandb
@@ -155,7 +156,7 @@ def main():
 
     ppo_config = PPOConfig(
         model_name=args.base_model,
-        learning_rate=5e-6,            # Lower LR for more stable training
+        learning_rate=1e-4,            # Lower LR for more stable training
         batch_size=args.batch_size,    # samples used per PPO step
         mini_batch_size=max(1, args.batch_size // 2),
         gradient_accumulation_steps=1,
@@ -264,8 +265,21 @@ def main():
         }
 
         # Add all PPO stats from trainer - they come with their own prefixes
+        # Filter out NaN values and convert tensors/arrays to scalars
         if isinstance(stats, dict):
-            log_dict.update(stats)
+            for key, value in stats.items():
+                # Convert tensors/arrays to Python scalars and filter NaN
+                if torch.is_tensor(value):
+                    val = value.item() if value.numel() == 1 else value.mean().item()
+                elif hasattr(value, '__iter__') and not isinstance(value, str):
+                    # Handle numpy arrays or lists
+                    val = float(np.mean(value)) if len(value) > 0 else 0.0
+                else:
+                    val = float(value)
+
+                # Only log if not NaN or inf
+                if not (torch.isnan(torch.tensor(val)) or torch.isinf(torch.tensor(val))):
+                    log_dict[key] = val
 
         if use_wandb:
             wandb.log(log_dict, step=step)
