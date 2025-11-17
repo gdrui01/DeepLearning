@@ -4,6 +4,7 @@ from typing import List
 
 import torch
 from tqdm import trange
+import wandb
 
 from transformers import AutoTokenizer
 from trl import PPOConfig, PPOTrainer, AutoModelForCausalLMWithValueHead
@@ -84,11 +85,42 @@ def main():
     ap.add_argument("--z", type=float, default=0.3)
     ap.add_argument("--f", type=str, default="none", choices=["relu","sigmoid","none"])
     ap.add_argument("--seed", type=int, default=42)
+    # wandb
+    ap.add_argument("--wandb_project", type=str, default="mt-breaker-ppo")
+    ap.add_argument("--wandb_run_name", type=str, default=None)
+    ap.add_argument("--no_wandb", action="store_true", help="disable wandb logging")
     args = ap.parse_args()
 
     os.makedirs(args.save_dir, exist_ok=True)
     random.seed(args.seed)
     torch.manual_seed(args.seed)
+
+    # ---- initialize wandb ----
+    use_wandb = not args.no_wandb
+    if use_wandb:
+        wandb.init(
+            project=args.wandb_project,
+            name=args.wandb_run_name,
+            config={
+                "base_model": args.base_model,
+                "steps": args.steps,
+                "batch_size": args.batch_size,
+                "learning_rate": 5e-6,
+                "gen_max_new_tokens": args.gen_max_new_tokens,
+                "top_p": args.top_p,
+                "temperature": args.temperature,
+                "loss_x": args.x,
+                "loss_y": args.y,
+                "loss_z": args.z,
+                "loss_f": args.f,
+                "seed": args.seed,
+                "num_seeds": args.k,
+                "ppo_epochs": 4,
+                "init_kl_coef": 0.2,
+                "target_kl": 0.1,
+                "cliprange": 0.2,
+            }
+        )
 
     # ---- data ----
     seeds = read_seeds(args.seeds, args.k)
@@ -204,11 +236,38 @@ def main():
         # 5) feed PPO step (query tensors, response tensors, reward tensors)
         stats = trainer.step(query_tensors, response_tensors, rewards)
 
-        # Log statistics periodically
+        # 6) Log metrics to wandb and console
+        mean_reward = sum(rewards_list) / len(rewards_list)
+        min_reward = min(rewards_list)
+        max_reward = max(rewards_list)
+
+        # Extract PPO stats
+        ppo_loss = stats.get('ppo/loss/total', 0.0) if isinstance(stats, dict) else 0.0
+        kl_div = stats.get('objective/kl', 0.0) if isinstance(stats, dict) else 0.0
+        entropy = stats.get('objective/entropy', 0.0) if isinstance(stats, dict) else 0.0
+        approx_kl = stats.get('objective/kl_coef', 0.0) if isinstance(stats, dict) else 0.0
+
+        # Compute response length statistics
+        response_lengths = [len(r) for r in response_tensors]
+        mean_response_len = sum(response_lengths) / len(response_lengths)
+
+        if use_wandb:
+            wandb.log({
+                "step": step + 1,
+                "reward/mean": mean_reward,
+                "reward/min": min_reward,
+                "reward/max": max_reward,
+                "ppo/loss": ppo_loss,
+                "ppo/kl_divergence": kl_div,
+                "ppo/entropy": entropy,
+                "ppo/kl_coef": approx_kl,
+                "generation/mean_response_length": mean_response_len,
+                "generation/sample_text": wandb.Html(f"<pre>{cleaned[0]}</pre>"),
+            })
+
+        # Log statistics periodically to console
         if (step + 1) % 10 == 0:
-            mean_reward = sum(rewards_list) / len(rewards_list)
-            kl = stats.get('objective/kl', 0.0) if isinstance(stats, dict) else 0.0
-            print(f"\nStep {step+1}: mean_reward={mean_reward:.3f}, kl={kl:.3f}")
+            print(f"\nStep {step+1}: reward={mean_reward:.3f}, kl={kl_div:.3f}, loss={ppo_loss:.3f}")
             print(f"Sample output: {cleaned[0][:100]}...")
 
         if (step + 1) % 20 == 0:
@@ -224,8 +283,27 @@ def main():
     ids = tok([demo], return_tensors="pt").to(trainer.accelerator.device)
     with torch.no_grad():
         gen = trainer.model.generate(**ids, **gen_kwargs)
-    print("Sample:", tok.batch_decode(gen, skip_special_tokens=True)[0])
-    
+    final_sample = tok.batch_decode(gen, skip_special_tokens=True)[0]
+    print("Sample:", final_sample)
+
+    # Log final model to wandb
+    if use_wandb:
+        # Log final sample
+        wandb.log({
+            "final/sample_output": wandb.Html(f"<pre>{final_sample}</pre>"),
+        })
+
+        # Save model as artifact
+        artifact = wandb.Artifact(
+            name=f"ppo-model-{wandb.run.id}",
+            type="model",
+            description=f"PPO fine-tuned {args.base_model} for MT-breaking"
+        )
+        artifact.add_dir(args.save_dir)
+        wandb.log_artifact(artifact)
+
+        wandb.finish()
+
 
 if __name__ == "__main__":
     main()
