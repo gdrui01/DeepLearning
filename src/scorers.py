@@ -36,13 +36,20 @@ class COMETQE:
         if not data:
             return [0.0] * len(src_list)
 
-        # Force CPU first for stability with lightning signatures
+        # Try GPU first, fall back to CPU if needed
         try:
-            pred = self.model.predict(data, batch_size=16, accelerator="cpu", devices=[1])
+            # Try modern lightning API with GPU
+            pred = self.model.predict(data, batch_size=16, accelerator="gpu", devices=1)
             scores = pred.scores if hasattr(pred, "scores") else pred
-        except (TypeError, AssertionError):
-            pred = self.model.predict(data, batch_size=16, gpus=0)
-            scores = pred.scores if hasattr(pred, "scores") else pred
+        except (TypeError, AssertionError, ValueError):
+            try:
+                # Fall back to older API with GPU
+                pred = self.model.predict(data, batch_size=16, gpus=1)
+                scores = pred.scores if hasattr(pred, "scores") else pred
+            except (TypeError, AssertionError, ValueError, RuntimeError):
+                # Final fallback to CPU
+                pred = self.model.predict(data, batch_size=16, accelerator="cpu", devices=1)
+                scores = pred.scores if hasattr(pred, "scores") else pred
 
         # Handle different return types from COMET
         if isinstance(scores, list):

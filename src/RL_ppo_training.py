@@ -126,15 +126,18 @@ def main():
 
     ppo_config = PPOConfig(
         model_name=args.base_model,
-        learning_rate=1e-5,
+        learning_rate=5e-6,            # Lower LR for more stable training
         batch_size=args.batch_size,    # samples used per PPO step
         mini_batch_size=max(1, args.batch_size // 2),
         gradient_accumulation_steps=1,
         ppo_epochs=4,
         cliprange=0.2,
+        cliprange_value=0.2,           # Clip value function updates
+        vf_coef=0.1,                   # Value function coefficient
         kl_penalty="kl",
-        init_kl_coef=0.05,
-        target_kl=0.15,
+        init_kl_coef=0.2,              # Higher initial KL penalty (was 0.05)
+        target_kl=0.1,                 # Lower target KL to prevent divergence (was 0.15)
+        adap_kl_ctrl=True,             # Adaptive KL control
         seed=args.seed,
         accelerator_kwargs={
             "device_placement": True,
@@ -199,7 +202,14 @@ def main():
         rewards = [torch.tensor(r) for r in rewards_list]
 
         # 5) feed PPO step (query tensors, response tensors, reward tensors)
-        trainer.step(query_tensors, response_tensors, rewards)
+        stats = trainer.step(query_tensors, response_tensors, rewards)
+
+        # Log statistics periodically
+        if (step + 1) % 10 == 0:
+            mean_reward = sum(rewards_list) / len(rewards_list)
+            kl = stats.get('objective/kl', 0.0) if isinstance(stats, dict) else 0.0
+            print(f"\nStep {step+1}: mean_reward={mean_reward:.3f}, kl={kl:.3f}")
+            print(f"Sample output: {cleaned[0][:100]}...")
 
         if (step + 1) % 20 == 0:
             trainer.save_pretrained(args.save_dir)
