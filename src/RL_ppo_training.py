@@ -5,8 +5,8 @@ from typing import List
 import torch
 from tqdm import trange
 
-from transformers import AutoTokenizer, AutoModelForCausalLM
-from trl import PPOConfig, PPOTrainer
+from transformers import AutoTokenizer
+from trl import PPOConfig, PPOTrainer, AutoModelForCausalLMWithValueHead
 
 from .translate import MTEnDe
 from .scorers import COMETQE, LMVerifier
@@ -47,12 +47,18 @@ class Method2Rewarder:
     f: str = "relu"
 
     @torch.inference_mode()
-    def reward(self, edits: List[str]) -> List[float]:
+    def reward(self, edits: List[str], indices: List[int]) -> List[float]:
+        """
+        Compute rewards for the given edits.
+        indices: which seeds these edits correspond to (for selecting de_old)
+        """
         t1 = self.mt.translate(edits)
         de_new = self.qe.difficulty(edits, t1)
         cons = constraint_score(edits)
         ver = self.vf.score(edits)
-        L = method2_loss(de_new, self.de_old, cons, ver, x=self.x, y=self.y, z=self.z, f=self.f)
+        # Select the corresponding de_old values for this batch
+        de_old_batch = [self.de_old[i] for i in indices]
+        L = method2_loss(de_new, de_old_batch, cons, ver, x=self.x, y=self.y, z=self.z, f=self.f)
         # PPO wants rewards (higher is better)
         return [-float(l) for l in L]
 
@@ -107,9 +113,12 @@ def main():
     # ---- policy + ref model ----
     tok = AutoTokenizer.from_pretrained(args.base_model)
     if tok.pad_token is None:
-        tok.pad_token = tok.eos_token
+        # Add a distinct pad token instead of reusing eos_token
+        tok.add_special_tokens({'pad_token': '[PAD]'})
 
-    policy = AutoModelForCausalLM.from_pretrained(args.base_model)
+    policy = AutoModelForCausalLMWithValueHead.from_pretrained(args.base_model)
+    # Resize embeddings if we added a new pad token
+    policy.pretrained_model.resize_token_embeddings(len(tok))
     # TRL will create a frozen reference model internally
 
     ppo_config = PPOConfig(
@@ -152,24 +161,34 @@ def main():
         idx = list(range(start, min(start + args.batch_size, n)))
         prompts = [prompts_all[i] for i in idx]
 
-        # 1) generate responses
-        inputs = tok(prompts, return_tensors="pt", padding=True).to(trainer.accelerator.device)
+        # 1) tokenize prompts
+        query_tensors = [tok(p, return_tensors="pt").input_ids.squeeze(0) for p in prompts]
+        query_tensors = [q.to(trainer.accelerator.device) for q in query_tensors]
+
+        # 2) generate responses
+        response_tensors = []
         with torch.no_grad():
-            outputs = trainer.model.generate(**inputs, **gen_kwargs)
-        responses = tok.batch_decode(outputs, skip_special_tokens=True)
+            for query in query_tensors:
+                response = trainer.generate(query, **gen_kwargs)
+                response_tensors.append(response.squeeze())
 
-        # keep only the continuation after the prompt (fallback to full string if needed)
+        # 3) decode responses for reward computation
+        responses_decoded = [tok.decode(r, skip_special_tokens=True) for r in response_tensors]
+
+        # Extract just the generated text (remove prompt)
         cleaned = []
-        for p, r in zip(prompts, responses):
-            r = r.strip()
-            cand = r[len(p):].strip() if r.startswith(p) else r
-            cleaned.append(cand if cand else r)
+        for p, r_full in zip(prompts, responses_decoded):
+            r_full = r_full.strip()
+            # Try to extract just the response part
+            cand = r_full[len(p):].strip() if r_full.startswith(p) else r_full
+            cleaned.append(cand if cand else r_full)
 
-        # 2) compute rewards (external scorers)
-        rewards = rewarder.reward(cleaned)   # list[float]
+        # 4) compute rewards (external scorers)
+        rewards_list = rewarder.reward(cleaned, idx)
+        rewards = [torch.tensor(r) for r in rewards_list]
 
-        # 3) feed PPO step (prompts, responses, rewards)
-        trainer.step(prompts, cleaned, rewards)
+        # 5) feed PPO step (query tensors, response tensors, reward tensors)
+        trainer.step(query_tensors, response_tensors, rewards)
 
         if (step + 1) % 20 == 0:
             trainer.save_pretrained(args.save_dir)
