@@ -112,7 +112,15 @@ class LMVerifier:
 
     @torch.inference_mode()
     def score(self, sentences: List[str], scale: float = 1.0) -> List[float]:
-        enc = self.tok(sentences, return_tensors="pt", padding=True).to(self.device)
+        # Handle empty or invalid sentences
+        valid_sentences = [s if s and s.strip() else "." for s in sentences]
+
+        enc = self.tok(valid_sentences, return_tensors="pt", padding=True).to(self.device)
+
+        # Handle edge case of empty tokenization
+        if enc["input_ids"].numel() == 0:
+            return [0.0] * len(sentences)
+
         out = self.model(**enc, labels=enc["input_ids"])
         # one scalar loss for the batch; broadcast for simplicity
         loss = float(out.loss)

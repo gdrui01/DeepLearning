@@ -113,16 +113,15 @@ def main():
     # ---- policy + ref model ----
     tok = AutoTokenizer.from_pretrained(args.base_model)
     if tok.pad_token is None:
-        # Add a distinct pad token instead of reusing eos_token
-        tok.add_special_tokens({'pad_token': '[PAD]'})
+        # For decoder-only models like GPT-2, using eos_token as pad_token is standard
+        # The attention mask warning is benign for generation tasks
+        tok.pad_token = tok.eos_token
 
     # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
     policy = AutoModelForCausalLMWithValueHead.from_pretrained(args.base_model)
-    # Resize embeddings if we added a new pad token
-    policy.pretrained_model.resize_token_embeddings(len(tok))
     # TRL will create a frozen reference model internally
 
     ppo_config = PPOConfig(
@@ -179,10 +178,21 @@ def main():
                 gen_output = trainer.generate(query, **gen_kwargs)
                 # Extract only the generated part (remove query tokens)
                 response = gen_output.squeeze()[len(query):]
+
+                # Handle empty responses - regenerate with higher temperature or use fallback
+                if len(response) == 0:
+                    # Generate at least something with higher temperature
+                    fallback_kwargs = {**gen_kwargs, "temperature": 1.0, "min_new_tokens": 5}
+                    gen_output = trainer.generate(query, **fallback_kwargs)
+                    response = gen_output.squeeze()[len(query):]
+
                 response_tensors.append(response)
 
         # 3) decode responses for reward computation (already excludes prompt)
         cleaned = [tok.decode(r, skip_special_tokens=True).strip() for r in response_tensors]
+
+        # Final safeguard: replace any empty strings with a minimal fallback
+        cleaned = [s if s else "." for s in cleaned]
 
         # 4) compute rewards (external scorers)
         rewards_list = rewarder.reward(cleaned, idx)
