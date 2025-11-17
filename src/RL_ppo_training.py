@@ -155,7 +155,7 @@ def main():
 
     ppo_config = PPOConfig(
         model_name=args.base_model,
-        learning_rate=5e-6,            # Lower LR for more stable training
+        learning_rate=1e-4,            # Lower LR for more stable training
         batch_size=args.batch_size,    # samples used per PPO step
         mini_batch_size=max(1, args.batch_size // 2),
         gradient_accumulation_steps=1,
