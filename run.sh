@@ -2,7 +2,6 @@
 
 #SBATCH --account=deep_learning
 #SBATCH --output=logs/mtbreaker_%j.out
-#SBATCH --time=10:00
 #SBATCH --job-name=setup-RL
 #SBATCH --gpus 1080ti:1
 
@@ -15,6 +14,6 @@ mkdir -p logs
 
 python -m src.RL_ppo_training \
   --seeds data/seeds.txt \
-  --k 100 \
-  --steps 200 \
-  --batch_size 8
+  --k 500 \
+  --steps 100 \
+  --batch_size 10
