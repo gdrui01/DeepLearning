@@ -116,6 +116,10 @@ def main():
         # Add a distinct pad token instead of reusing eos_token
         tok.add_special_tokens({'pad_token': '[PAD]'})
 
+    # Set device
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+
     policy = AutoModelForCausalLMWithValueHead.from_pretrained(args.base_model)
     # Resize embeddings if we added a new pad token
     policy.pretrained_model.resize_token_embeddings(len(tok))
@@ -133,7 +137,10 @@ def main():
         init_kl_coef=0.05,
         target_kl=0.15,
         seed=args.seed,
-        accelerator_kwargs={"mixed_precision": "fp16" if torch.cuda.is_available() else "no"},
+        accelerator_kwargs={
+            "device_placement": True,
+            "mixed_precision": "fp16" if torch.cuda.is_available() else "no"
+        },
         log_with=None,
     )
 
@@ -156,32 +163,26 @@ def main():
     n = len(prompts_all)
     print(f"Starting PPO: seeds={n}, steps={args.steps}, batch={args.batch_size}")
     for step in trange(args.steps, desc="PPO"):
-        # sample a mini-batch of prompts (cyclic)
+        # sample a mini-batch of prompts (cyclic with wrapping)
         start = (step * args.batch_size) % n
-        idx = list(range(start, min(start + args.batch_size, n)))
+        idx = [(start + i) % n for i in range(args.batch_size)]
         prompts = [prompts_all[i] for i in idx]
 
         # 1) tokenize prompts
         query_tensors = [tok(p, return_tensors="pt").input_ids.squeeze(0) for p in prompts]
         query_tensors = [q.to(trainer.accelerator.device) for q in query_tensors]
 
-        # 2) generate responses
+        # 2) generate responses (ONLY the new tokens, not including prompt)
         response_tensors = []
         with torch.no_grad():
             for query in query_tensors:
-                response = trainer.generate(query, **gen_kwargs)
-                response_tensors.append(response.squeeze())
+                gen_output = trainer.generate(query, **gen_kwargs)
+                # Extract only the generated part (remove query tokens)
+                response = gen_output.squeeze()[len(query):]
+                response_tensors.append(response)
 
-        # 3) decode responses for reward computation
-        responses_decoded = [tok.decode(r, skip_special_tokens=True) for r in response_tensors]
-
-        # Extract just the generated text (remove prompt)
-        cleaned = []
-        for p, r_full in zip(prompts, responses_decoded):
-            r_full = r_full.strip()
-            # Try to extract just the response part
-            cand = r_full[len(p):].strip() if r_full.startswith(p) else r_full
-            cleaned.append(cand if cand else r_full)
+        # 3) decode responses for reward computation (already excludes prompt)
+        cleaned = [tok.decode(r, skip_special_tokens=True).strip() for r in response_tensors]
 
         # 4) compute rewards (external scorers)
         rewards_list = rewarder.reward(cleaned, idx)
