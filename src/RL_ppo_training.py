@@ -7,7 +7,7 @@ from tqdm import trange
 import wandb
 
 from transformers import AutoTokenizer
-from trl import PPOConfig, PPOTrainer, AutoModelForCausalLMWithValueHead
+from trl import PPOConfig, PPOTrainer, AutoModelForSeq2SeqLMWithValueHead
 
 from .translate import MTEnDe
 from .scorers import COMETQE, LMVerifier
@@ -15,7 +15,7 @@ from .constraints import constraint_score
 from .losses import method2_loss
 
 
-DEFAULT_BASE = "gpt2"
+DEFAULT_BASE = "google/flan-t5-base"
 DEFAULT_INSTRUCTION = (
     "Make the following sentence harder to translate while keeping it grammatically correct and natural.\n\n"
     "'{seed}'\n\nRewrite it as one grammatical English sentence. Output only the edited sentence, no other text."
@@ -144,16 +144,13 @@ def main():
 
     # ---- policy + ref model ----
     tok = AutoTokenizer.from_pretrained(args.base_model)
-    if tok.pad_token is None:
-        # For decoder-only models like GPT-2, using eos_token as pad_token is standard
-        # The attention mask warning is benign for generation tasks
-        tok.pad_token = tok.eos_token
+    # T5 models already have pad_token configured, no need to set it manually
 
     # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    policy = AutoModelForCausalLMWithValueHead.from_pretrained(args.base_model)
+    policy = AutoModelForSeq2SeqLMWithValueHead.from_pretrained(args.base_model)
     # TRL will create a frozen reference model internally
 
     ppo_config = PPOConfig(
@@ -206,24 +203,25 @@ def main():
         query_tensors = [tok(p, return_tensors="pt").input_ids.squeeze(0) for p in prompts]
         query_tensors = [q.to(trainer.accelerator.device) for q in query_tensors]
 
-        # 2) generate responses (ONLY the new tokens, not including prompt)
+        # 2) generate responses
+        # For seq2seq models like T5, the output is the full generation (no prompt prefix to remove)
         response_tensors = []
         with torch.no_grad():
             for query in query_tensors:
                 gen_output = trainer.generate(query, **gen_kwargs)
-                # Extract only the generated part (remove query tokens)
-                response = gen_output.squeeze()[len(query):]
+                # For seq2seq, the output is already just the response
+                response = gen_output.squeeze()
 
                 # Handle empty responses - regenerate with higher temperature or use fallback
                 if len(response) == 0:
                     # Generate at least something with higher temperature
                     fallback_kwargs = {**gen_kwargs, "temperature": 1.0, "min_new_tokens": 5}
                     gen_output = trainer.generate(query, **fallback_kwargs)
-                    response = gen_output.squeeze()[len(query):]
+                    response = gen_output.squeeze()
 
                 response_tensors.append(response)
 
-        # 3) decode responses for reward computation (already excludes prompt)
+        # 3) decode responses for reward computation
         cleaned = [tok.decode(r, skip_special_tokens=True).strip() for r in response_tensors]
 
         # Final safeguard: replace any empty strings with a minimal fallback
