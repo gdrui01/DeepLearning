@@ -41,9 +41,9 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForSeq2Se
 # )
 DEFAULT_INSTRUCTION = (
     """
-    We want to find a sentence in English that’s exceptionally difficult for a machine translation model to translate into German. The goal is to expose a wide range of translation errors and severely challenge the MT model’s capabilities. 
+    We want to find a sentence in English that’s exceptionally difficult for a machine translation model to translate into some other language. The goal is to expose a wide range of translation errors and severely challenge the MT model’s capabilities. 
 
-    Use this English sentence as a foundation an try to make it even more difficult to translate: „{seed}“
+    Use this English sentence as a foundation and try to make it even more difficult to translate: „{seed}“
 
     Only return the difficult-to-translate English sentence, nothing else! 
     """

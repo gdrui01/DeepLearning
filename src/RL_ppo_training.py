@@ -18,8 +18,13 @@ from .losses import method2_loss
 
 DEFAULT_BASE = "google/flan-t5-base"
 DEFAULT_INSTRUCTION = (
-    "Make the following sentence harder to translate while keeping it grammatically correct and natural.\n\n"
-    "'{seed}'\n\nRewrite it as one grammatical English sentence. Output only the edited sentence, no other text."
+        """
+    We want to find a sentence in English that’s exceptionally difficult for a machine translation model to translate into some other language. The goal is to expose a wide range of translation errors and severely challenge the MT model’s capabilities.
+
+    Use this English sentence as a foundation and try to make it even more difficult to translate by adding words, changing the structure of the sentence or making other modifications: „{seed}“
+
+    Only return the difficult-to-translate English sentence, nothing else!
+    """
 )
 
 
