@@ -65,7 +65,7 @@ class Method2Rewarder:
         de_old_batch = [self.de_old[i] for i in indices]
         L = method2_loss(de_new, de_old_batch, cons, ver, x=self.x, y=self.y, z=self.z, f=self.f)
         # PPO wants rewards (higher is better)
-        return [-float(l) for l in L]
+        return [-float(l) for l in L], cons, ver, (de_new - de_old_batch)
 
 
 def build_prompts(seeds: List[str]) -> List[str]:
@@ -75,12 +75,12 @@ def build_prompts(seeds: List[str]) -> List[str]:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seeds", type=str, default="data/seeds.txt")
-    ap.add_argument("--k", type=int, default=200, help="num seeds to use")
+    ap.add_argument("--k", type=int, default=500, help="num seeds to use")
     ap.add_argument("--base_model", type=str, default=DEFAULT_BASE)
     ap.add_argument("--save_dir", type=str, default="checkpoints/gpt2-ppo-method2")
     ap.add_argument("--steps", type=int, default=200)           # PPO update steps
     ap.add_argument("--batch_size", type=int, default=8)        # prompts per PPO step
-    ap.add_argument("--gen_max_new_tokens", type=int, default=40)
+    ap.add_argument("--gen_max_new_tokens", type=int, default=2000)
     ap.add_argument("--top_p", type=float, default=0.95)
     ap.add_argument("--temperature", type=float, default=0.9)
     # loss weights
@@ -243,7 +243,7 @@ def main():
         cleaned = [s if s else "." for s in cleaned]
 
         # 4) compute rewards (external scorers)
-        rewards_list = rewarder.reward(cleaned, idx)
+        rewards_list, con_rewards, ver_rewards, diff_rewards = rewarder.reward(cleaned, idx)
         rewards = [torch.tensor(r) for r in rewards_list]
 
         # 5) feed PPO step (query tensors, response tensors, reward tensors)
@@ -253,6 +253,9 @@ def main():
         mean_reward = sum(rewards_list) / len(rewards_list)
         min_reward = min(rewards_list)
         max_reward = max(rewards_list)
+        con_reward_mean = sum(con_rewards) / len(con_rewards)
+        ver_reward_mean = sum(ver_rewards) / len(ver_rewards)
+        diff_reward_mean = sum(diff_rewards) / len(diff_rewards)
 
         # Compute response length statistics
         response_lengths = [len(r) for r in response_tensors]
@@ -263,6 +266,9 @@ def main():
             "reward/mean": mean_reward,
             "reward/min": min_reward,
             "reward/max": max_reward,
+            "reward/constraint_mean": con_reward_mean,
+            "reward/verifier_mean": ver_reward_mean,
+            "reward/difficulty_delta_mean": diff_reward_mean,
             "generation/mean_response_length": mean_response_len,
             "generation/sample_text": wandb.Html(f"<pre>{cleaned[0]}</pre>"),
         }

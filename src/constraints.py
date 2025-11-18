@@ -2,8 +2,8 @@ import re
 from typing import List
 
 def constraint_score(sentences: List[str],
-                     min_len: int = 6,
-                     max_len: int = 22) -> List[float]:
+                     min_len: int = 4,
+                     max_len: int = 40) -> List[float]:
     """
     Simple constraint signal: length window + lexical diversity.
     Returns higher-is-better scores.
