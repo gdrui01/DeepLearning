@@ -39,13 +39,20 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForSeq2Se
 #     "Make the following sentence harder to translate while keeping it grammatically correct and natural.\n\n"
 #     "'{seed}'\n\nRewrite it as one grammatical English sentence. Output only the edited sentence, no other text."
 # )
+# DEFAULT_INSTRUCTION = (
+#     """
+#     We want to find a sentence in English that’s exceptionally difficult for a machine translation model to translate into some other language. The goal is to expose a wide range of translation errors and severely challenge the MT model’s capabilities. 
+
+#     Use this English sentence as a foundation and try to make it even more difficult to translate: „{seed}“
+
+#     Only return the difficult-to-translate English sentence, nothing else! 
+#     """
+# )
 DEFAULT_INSTRUCTION = (
     """
-    We want to find a sentence in English that’s exceptionally difficult for a machine translation model to translate into some other language. The goal is to expose a wide range of translation errors and severely challenge the MT model’s capabilities. 
+    Rewrite this sentence to be extremely difficult for machine translation using idioms, ambiguity, and wordplay, while keeping it grammatically correct English: {seed}
 
-    Use this English sentence as a foundation and try to make it even more difficult to translate: „{seed}“
-
-    Only return the difficult-to-translate English sentence, nothing else! 
+    Difficult sentence:
     """
 )
 

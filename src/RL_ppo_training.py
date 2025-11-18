@@ -18,12 +18,10 @@ from .losses import method2_loss
 
 DEFAULT_BASE = "google/flan-t5-base"
 DEFAULT_INSTRUCTION = (
-        """
-    We want to find a sentence in English that’s exceptionally difficult for a machine translation model to translate into some other language. The goal is to expose a wide range of translation errors and severely challenge the MT model’s capabilities.
+    """
+    Rewrite this sentence to be extremely difficult for machine translation using idioms, ambiguity, and wordplay, while keeping it grammatically correct English: {seed}
 
-    Use this English sentence as a foundation and try to make it even more difficult to translate by adding words, changing the structure of the sentence or making other modifications: „{seed}“
-
-    Only return the difficult-to-translate English sentence, nothing else!
+    Difficult sentence:
     """
 )
 
