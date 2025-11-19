@@ -166,7 +166,7 @@ def main():
         ppo_epochs=4,
         cliprange=0.2,
         cliprange_value=0.2,           # Clip value function updates
-        vf_coef=0.1,                   # Value function coefficient
+        vf_coef=0.5,                   # Value function coefficient
         kl_penalty="kl",
         init_kl_coef=0.2,              # Higher initial KL penalty (was 0.05)
         target_kl=0.1,                 # Lower target KL to prevent divergence (was 0.15)
