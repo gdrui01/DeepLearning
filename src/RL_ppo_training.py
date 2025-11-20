@@ -65,7 +65,8 @@ class Method2Rewarder:
         de_old_batch = [self.de_old[i] for i in indices]
         L = method2_loss(de_new, de_old_batch, cons, ver, x=self.x, y=self.y, z=self.z, f=self.f)
         # PPO wants rewards (higher is better)
-        return [-float(l) for l in L], cons, ver, (de_new - de_old_batch)
+        delta = de_new - np.array(de_old_batch)
+        return [-float(l) for l in L], cons, ver, delta.tolist()
 
 
 def build_prompts(seeds: List[str]) -> List[str]:
