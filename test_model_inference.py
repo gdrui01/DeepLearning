@@ -1,3 +1,5 @@
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
 model_name = "Qwen/Qwen3-0.6B"
 
 # load the tokenizer and the model
