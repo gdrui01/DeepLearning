@@ -51,7 +51,7 @@ A brief list of what still has to be implemented and/or tested:
 ### Training Parameters
 - Generally, tune training parameters as some are currently still very conservative (e.g. batch size)
 
-###...eventually: EVALUATION!!!
+### ...eventually: EVALUATION!!!
 
 ---
 
