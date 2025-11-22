@@ -35,6 +35,25 @@ Unlike traditional supervised fine-tuning approaches, this PPO-based method can 
 
 ---
 
+## ToDos
+
+A brief list of what still has to be implemented and/or tested:
+### Output Verification
+- Current verifier computes one perplexity score (average) per batch → Is there any benefit in storing individual scores (per response in batch) to trace back verification scores to individual responses?
+- Add some sort of format verification (we want single sentence outputs, etc.)
+### Rewards
+- Tune weights of individual reward paramters, especially increasing weight of format and semantic verification (→ multi-staged training with gradually changing reward coefficients might be beneficial, i.e. putting more weight on format verification at early training stages and more weight on increased translation difficulty during later training stages.)
+### GPU Memory Optimization
+- Optimize GPU-memory usage to run code on GPU with (ideally) Adam optimizer
+### PPO-Trainer
+- Update PPO-Trainer to newest release, which might be beneficial for training (default lr_scheduler might be better than current implementation, which has not been tuned to the task at all!)
+- Run PPO with Adam optimizer
+### Training Parameters
+- Generally, tune training parameters as some are currently still very conservative (batch size)
+ 
+
+---
+
 ## Environment Setup
 ```bash
 conda env create -f env.yaml
