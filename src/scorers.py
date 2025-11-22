@@ -12,9 +12,10 @@ class COMETQE:
     """
     Wrap COMET QE to compute difficulty = 1 - QE(src, mt).
     """
-    def __init__(self, model_name: str = QE_MODEL):
+    def __init__(self, model_name: str = QE_MODEL, accelerator_preference: str = "gpu"):
         ckpt = download_model(model_name)   # handles local cache
         self.model = load_from_checkpoint(ckpt)
+        self.accelerator_preference = accelerator_preference
         try:
             if hasattr(self.model, "trainer"):
                 self.model.trainer.logger = False
@@ -37,19 +38,35 @@ class COMETQE:
             return [0.0] * len(src_list)
 
         # Try GPU first, fall back to CPU if needed
-        try:
-            # Try modern lightning API with GPU
-            pred = self.model.predict(data, batch_size=16, accelerator="gpu", devices=1)
-            scores = pred.scores if hasattr(pred, "scores") else pred
-        except (TypeError, AssertionError, ValueError):
+        # Build ordered list of accelerator configs to try
+        pref = (self.accelerator_preference or "gpu").lower()
+        attempts = []
+        if pref == "cpu":
+            attempts.extend([
+                {"accelerator": "cpu", "devices": 1},
+                {"gpus": 0},
+            ])
+        else:
+            attempts.extend([
+                {"accelerator": "gpu", "devices": 1},
+                {"gpus": 1},
+            ])
+        # Always add CPU fallbacks last
+        attempts.extend([
+            {"accelerator": "cpu", "devices": 1},
+            {"gpus": 0},
+        ])
+
+        last_err = None
+        for cfg in attempts:
             try:
-                # Fall back to older API with GPU
-                pred = self.model.predict(data, batch_size=16, gpus=1)
+                pred = self.model.predict(data, batch_size=16, **cfg)
                 scores = pred.scores if hasattr(pred, "scores") else pred
-            except (TypeError, AssertionError, ValueError, RuntimeError):
-                # Final fallback to CPU
-                pred = self.model.predict(data, batch_size=16, accelerator="cpu", devices=1)
-                scores = pred.scores if hasattr(pred, "scores") else pred
+                break
+            except (TypeError, AssertionError, ValueError, RuntimeError) as e:
+                last_err = e
+        else:
+            raise RuntimeError("COMET QE prediction failed for all accelerator configs") from last_err
 
         # Handle different return types from COMET
         if isinstance(scores, list):

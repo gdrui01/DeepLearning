@@ -7,7 +7,7 @@
 #SBATCH --gpus 1080ti:1
 
 . /etc/profile.d/modules.sh
-module add cuda/12.1
+module add cuda/12.6
 
 source "$HOME/venvs/mtbreaker/bin/activate"
 cd "$HOME/DeepLearning/"

@@ -4,11 +4,12 @@ from typing import List
 
 import numpy as np
 import torch
+from torch.optim import SGD
 from tqdm import trange
 import wandb
 
-from transformers import AutoTokenizer
-from trl import PPOConfig, PPOTrainer, AutoModelForSeq2SeqLMWithValueHead
+from transformers import AutoTokenizer, get_linear_schedule_with_warmup
+from trl import PPOConfig, PPOTrainer, AutoModelForCausalLMWithValueHead
 
 from .translate import MTEnDe
 from .scorers import COMETQE, LMVerifier
@@ -16,13 +17,11 @@ from .constraints import constraint_score
 from .losses import method2_loss
 
 
-DEFAULT_BASE = "google/flan-t5-base"
+DEFAULT_BASE = "Qwen/Qwen3-0.6B-Base"
 DEFAULT_INSTRUCTION = (
-    """
-    Rewrite this sentence to be extremely difficult for machine translation using idioms, ambiguity, and wordplay, while keeping it grammatically correct English: {seed}
+    """Rewrite this sentence to be extremely difficult for machine translation using idioms, ambiguity, and wordplay, while keeping it grammatically correct English: "{seed}"
 
-    Difficult sentence:
-    """
+    Only return the single edited sentence."""
 )
 
 
@@ -69,8 +68,24 @@ class Method2Rewarder:
         return [-float(l) for l in L], cons, ver, delta.tolist()
 
 
-def build_prompts(seeds: List[str]) -> List[str]:
-    return [DEFAULT_INSTRUCTION.format(seed=s) for s in seeds]
+def build_prompts(seeds: List[str], tokenizer) -> List[str]:
+    """
+    Build prompts using Qwen3's chat template format.
+    Returns list of formatted prompt strings ready for tokenization.
+    """
+    prompts = []
+    for seed in seeds:
+        instruction = DEFAULT_INSTRUCTION.format(seed=seed)
+        # messages = [{"role": "user", "content": instruction}]
+        # # Apply chat template with thinking disabled for efficiency during PPO training
+        # formatted_prompt = tokenizer.apply_chat_template(
+        #     messages,
+        #     tokenize=False,
+        #     add_generation_prompt=True,
+        #     enable_thinking=False  # Disable thinking mode for faster generation during PPO
+        # )
+        prompts.append(instruction)
+    return prompts
 
 
 def main():
@@ -80,10 +95,13 @@ def main():
     ap.add_argument("--base_model", type=str, default=DEFAULT_BASE)
     ap.add_argument("--save_dir", type=str, default="checkpoints/gpt2-ppo-method2")
     ap.add_argument("--steps", type=int, default=200)           # PPO update steps
-    ap.add_argument("--batch_size", type=int, default=8)        # prompts per PPO step
-    ap.add_argument("--gen_max_new_tokens", type=int, default=2000)
-    ap.add_argument("--top_p", type=float, default=0.95)
-    ap.add_argument("--temperature", type=float, default=0.9)
+    ap.add_argument("--batch_size", type=int, default=2)        # prompts per PPO step (reduced for memory efficiency with Qwen3 + PPO's 2x model requirement)
+    ap.add_argument("--gen_max_new_tokens", type=int, default=64, help="Max tokens to generate. Reduced for memory efficiency with PPO's 2x model requirement. 64-128 is reasonable for sentence rewriting.")
+    ap.add_argument("--top_p", type=float, default=0.8, help="Qwen3 recommended: 0.95 for thinking mode, 0.8 for non-thinking")
+    ap.add_argument("--temperature", type=float, default=0.7, help="Qwen3 recommended: 0.6 for thinking mode, 0.7 for non-thinking")
+    ap.add_argument("--mt_device", type=str, default="cpu", choices=["cpu", "cuda"], help="Device for MT translator (defaults to CPU to save VRAM)")
+    ap.add_argument("--lm_verifier_device", type=str, default="cpu", choices=["cpu", "cuda"], help="Device for LM verifier scorer")
+    ap.add_argument("--comet_accelerator", type=str, default="cpu", choices=["cpu", "gpu"], help="Accelerator used by COMET QE scorer")
     # loss weights
     ap.add_argument("--x", type=float, default=1.0)
     ap.add_argument("--y", type=float, default=0.3)
@@ -99,6 +117,7 @@ def main():
     os.makedirs(args.save_dir, exist_ok=True)
     random.seed(args.seed)
     torch.manual_seed(args.seed)
+    print("Args parsed.")
 
     # ---- initialize wandb ----
     use_wandb = not args.no_wandb
@@ -127,16 +146,22 @@ def main():
             }
         )
 
+    # ---- policy + ref model (needed for tokenizer to build prompts) ----
+    tok = AutoTokenizer.from_pretrained(args.base_model)
+    # Try to prevent tokenizer mismatch
+    tok.pad_token = tok.eos_token
+    tok.padding_side = "left"
+
     # ---- data ----
     seeds = read_seeds(args.seeds, args.k)
     if not seeds:
         raise SystemExit(f"No seeds found in {args.seeds}")
-    prompts_all = build_prompts(seeds)
+    prompts_all = build_prompts(seeds, tok)
 
     # ---- external scorers ----
-    mt = MTEnDe()
-    qe = COMETQE()            # wmt22-cometkiwi-da (reference-free)
-    vf = LMVerifier()
+    mt = MTEnDe(device=args.mt_device)
+    qe = COMETQE(accelerator_preference=args.comet_accelerator)            # wmt22-cometkiwi-da (reference-free)
+    vf = LMVerifier(device=args.lm_verifier_device)
 
     # Precompute de_old once (1 - QE(s0, t0))
     t0 = mt.translate(seeds)
@@ -148,23 +173,53 @@ def main():
     )
 
     # ---- policy + ref model ----
-    tok = AutoTokenizer.from_pretrained(args.base_model)
-    # T5 models already have pad_token configured, no need to set it manually
-
     # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
+    
+    # Clear cache before loading models
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        print(f"GPU memory before model load: {torch.cuda.memory_allocated(device)/1e9:.2f} GB allocated, {torch.cuda.memory_reserved(device)/1e9:.2f} GB reserved")
 
-    policy = AutoModelForSeq2SeqLMWithValueHead.from_pretrained(args.base_model)
-    # TRL will create a frozen reference model internally
+    # Load model in FP32 - mixed precision training will handle memory efficiency
+    # Loading in FP16 directly conflicts with GradScaler which expects FP32 gradients
+    # Mixed precision will automatically convert to FP16 during forward pass while keeping gradients in FP32
+    policy = AutoModelForCausalLMWithValueHead.from_pretrained(
+        args.base_model,
+        # Don't specify torch_dtype - let it load in default precision (FP32)
+        # Mixed precision training will handle the conversion for memory efficiency
+    )
+    # Explicitly move to device
+    if torch.cuda.is_available():
+        policy = policy.to(device)
+        print(f"GPU memory after policy load: {torch.cuda.memory_allocated(device)/1e9:.2f} GB allocated, {torch.cuda.memory_reserved(device)/1e9:.2f} GB reserved")
+    
+    # Enable gradient checkpointing to save memory during training
+    if hasattr(policy.pretrained_model, 'gradient_checkpointing_enable'):
+        policy.pretrained_model.gradient_checkpointing_enable()
+        print("Gradient checkpointing enabled")
+    
+    # TRL will create a frozen reference model internally (this doubles memory usage!)
+    # For Qwen3-0.6B: ~1.2B parameters total (2x 0.6B), with FP32 weights this is ~4.8GB
+    # Plus activations, gradients, optimizer states, and generation buffers = easily 10-11GB on 1080Ti
+
+    PPO_EPOCHS = 2
+    optimizer = SGD(policy.parameters(), lr=5e-5)
+    num_training_steps = args.steps * PPO_EPOCHS
+    lr_scheduler = get_linear_schedule_with_warmup(
+        optimizer,
+        num_warmup_steps=0,
+        num_training_steps=num_training_steps,
+    )
 
     ppo_config = PPOConfig(
         model_name=args.base_model,
-        learning_rate=1e-4,            # Lower LR for more stable training
+        # learning_rate=1e-4,            # Lower LR for more stable training
         batch_size=args.batch_size,    # samples used per PPO step
-        mini_batch_size=max(1, args.batch_size // 2),
+        mini_batch_size=1,             # Process one sample at a time to minimize memory usage
         gradient_accumulation_steps=1,
-        ppo_epochs=4,
+        ppo_epochs=PPO_EPOCHS,                  # Reduced from 4 to save memory (fewer forward/backward passes)
         cliprange=0.2,
         cliprange_value=0.2,           # Clip value function updates
         vf_coef=0.5,                   # Value function coefficient
@@ -184,7 +239,15 @@ def main():
         config=ppo_config,
         model=policy,
         tokenizer=tok,
+        optimizer=optimizer,
+        lr_scheduler=lr_scheduler,
     )
+    
+    # After PPOTrainer creation, check memory again (should be ~2x due to reference model)
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()  # Clear any fragmentation
+        print(f"GPU memory after PPOTrainer init: {torch.cuda.memory_allocated(device)/1e9:.2f} GB allocated, {torch.cuda.memory_reserved(device)/1e9:.2f} GB reserved")
+        print(f"Max GPU memory: {torch.cuda.max_memory_allocated(device)/1e9:.2f} GB")
 
     gen_kwargs = dict(
         do_sample=True,
@@ -194,6 +257,8 @@ def main():
         min_new_tokens=2,  # Ensure at least 2 tokens to avoid masking issues
         pad_token_id=tok.pad_token_id,
         eos_token_id=tok.eos_token_id,
+        top_k=20,  # Qwen3 recommended setting
+        repetition_penalty=1.0,  # Can be adjusted to reduce repetitions
     )
 
     # ---- PPO loop ----
@@ -204,20 +269,27 @@ def main():
         start = (step * args.batch_size) % n
         idx = [(start + i) % n for i in range(args.batch_size)]
         prompts = [prompts_all[i] for i in idx]
-
+        print("Prompts: ", prompts)
         # 1) tokenize prompts
-        query_tensors = [tok(p, return_tensors="pt").input_ids.squeeze(0) for p in prompts]
-        query_tensors = [q.to(trainer.accelerator.device) for q in query_tensors]
+        query_tensors = [tok(p, return_tensors="pt").input_ids.squeeze(0) for p in prompts] # looks sketchy?
+        query_tensors = [q.to(trainer.accelerator.device) for q in query_tensors] # move to device
 
         # 2) generate responses
-        # For seq2seq models like T5, the output is the full generation (no prompt prefix to remove)
+        # For causal models like Qwen3, we need to extract only the generated part (excluding the prompt)
         response_tensors = []
+        # Clear cache before generation to maximize available memory
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         with torch.no_grad():
             for query in query_tensors:
                 gen_output = trainer.generate(query, **gen_kwargs)
-                # For seq2seq, the output is already just the response
-                response = gen_output.squeeze()
-
+                # For causal models, extract only the generated tokens (excluding the input prompt)
+                input_len = query.shape[0]
+                response = gen_output.squeeze()[input_len:]
+                print(f"Decoded prompt: {tok.decode(query, skip_special_tokens=True).strip()}")
+                """---------------------------------------------------------------------------------
+                CHECK THIS FALLBACK!!!
+                ---------------------------------------------------------------------------------"""
                 # Handle empty or very short responses - regenerate with higher temperature or use fallback
                 # Need at least 2 tokens to avoid masking issues in PPO trainer
                 max_retries = 3
@@ -226,7 +298,7 @@ def main():
                     # Generate at least something with higher temperature
                     fallback_kwargs = {**gen_kwargs, "temperature": min(1.5 + retry_count * 0.2, 2.0), "min_new_tokens": 5}
                     gen_output = trainer.generate(query, **fallback_kwargs)
-                    response = gen_output.squeeze()
+                    response = gen_output.squeeze()[input_len:]
                     retry_count += 1
 
                 # If still too short after retries, create a minimal valid response
@@ -236,6 +308,10 @@ def main():
                     response = tok(fallback_text, return_tensors="pt").input_ids.squeeze(0).to(trainer.accelerator.device)
 
                 response_tensors.append(response)
+                
+                # Clear cache after each generation to prevent memory accumulation
+                if torch.cuda.is_available() and len(response_tensors) % 2 == 0:  # Clear every 2 generations
+                    torch.cuda.empty_cache()
 
         # 3) decode responses for reward computation
         cleaned = [tok.decode(r, skip_special_tokens=True).strip() for r in response_tensors]
@@ -245,10 +321,17 @@ def main():
 
         # 4) compute rewards (external scorers)
         rewards_list, con_rewards, ver_rewards, diff_rewards = rewarder.reward(cleaned, idx)
-        rewards = [torch.tensor(r) for r in rewards_list]
+        # Move rewards to the same device as query/response tensors (GPU)
+        rewards = [torch.tensor(r, device=trainer.accelerator.device) for r in rewards_list]
 
         # 5) feed PPO step (query tensors, response tensors, reward tensors)
+        # Clear cache before PPO step to ensure maximum available memory
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         stats = trainer.step(query_tensors, response_tensors, rewards)
+        # Clear cache after PPO step
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
         # 6) Log metrics to wandb and console
         mean_reward = sum(rewards_list) / len(rewards_list)
@@ -312,11 +395,22 @@ def main():
     print(f"Saved PPO policy to: {args.save_dir}")
 
     # tiny sample after training
-    demo = DEFAULT_INSTRUCTION.format(seed="He saw her duck.")
-    ids = tok([demo], return_tensors="pt").to(trainer.accelerator.device)
+    demo_seed = "He saw her duck."
+    demo_instruction = DEFAULT_INSTRUCTION.format(seed=demo_seed)
+    demo_messages = [{"role": "user", "content": demo_instruction}]
+    demo_text = tok.apply_chat_template(
+        demo_messages,
+        tokenize=False,
+        add_generation_prompt=True,
+        enable_thinking=False
+    )
+    ids = tok([demo_text], return_tensors="pt").to(trainer.accelerator.device)
     with torch.no_grad():
         gen = trainer.model.generate(**ids, **gen_kwargs)
-    final_sample = tok.batch_decode(gen, skip_special_tokens=True)[0]
+    # Extract only the generated part (excluding the prompt)
+    input_len = ids.input_ids.shape[1]
+    generated_ids = gen[0][input_len:]
+    final_sample = tok.decode(generated_ids, skip_special_tokens=True)
     print("Sample:", final_sample)
 
     # Log final model to wandb

@@ -5,8 +5,9 @@
 #SBATCH --job-name=setup-RL
 #SBATCH --gpus 1080ti:1
 
+
 . /etc/profile.d/modules.sh
-module add cuda/12.1
+module add cuda/12.6
 
 source "$HOME/venvs/mtbreaker/bin/activate"
 cd "$HOME/DeepLearning/"
@@ -16,4 +17,4 @@ python -m src.RL_ppo_training \
   --seeds data/seeds.txt \
   --k 500 \
   --steps 300 \
-  --batch_size 10
+  --batch_size 2
