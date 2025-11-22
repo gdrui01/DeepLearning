@@ -23,6 +23,17 @@ DEFAULT_INSTRUCTION = (
 
     Only return the single edited sentence."""
 )
+# # Could be a better prompt
+# DEFAULT_INSTRUCTION = (
+#     """Easy sentence: "The weather is nice today."
+#     Difficult sentence: "The whether of whether or not to weather the storm is up in the air."
+
+#     Easy sentence: "He went to the bank."
+#     Difficult sentence: "He went to the bank, though whether for money or a riverbank remained unclear."
+
+#     Easy sentence: "{seed}"
+#     Difficult sentence:"""
+# )
 
 
 def read_seeds(path: str, k: int | None = None) -> List[str]:
@@ -265,8 +276,9 @@ def main():
         min_new_tokens=2,  # Ensure at least 2 tokens to avoid masking issues
         pad_token_id=tok.pad_token_id,
         eos_token_id=tok.eos_token_id,
-        top_k=20,  # Qwen3 recommended setting
-        repetition_penalty=1.0,  # Can be adjusted to reduce repetitions
+        top_k=50,  # Increased from 20 to allow more vocabulary diversity
+        repetition_penalty=1.1,  # Penalize repetitions to avoid repeating prompt
+        no_repeat_ngram_size=3,  # Prevent repeating 3-grams (helps avoid instruction repetition)
     )
 
     # ---- Test generation BEFORE training ----
