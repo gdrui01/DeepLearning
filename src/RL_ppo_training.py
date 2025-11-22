@@ -110,9 +110,9 @@ def main():
     ap.add_argument("--gen_max_new_tokens", type=int, default=64, help="Max tokens to generate. Reduced for memory efficiency with PPO's 2x model requirement. 64-128 is reasonable for sentence rewriting.")
     ap.add_argument("--top_p", type=float, default=0.8, help="Qwen3 recommended: 0.95 for thinking mode, 0.8 for non-thinking")
     ap.add_argument("--temperature", type=float, default=0.7, help="Qwen3 recommended: 0.6 for thinking mode, 0.7 for non-thinking")
-    ap.add_argument("--mt_device", type=str, default="cpu", choices=["cpu", "cuda"], help="Device for MT translator (defaults to CPU to save VRAM)")
-    ap.add_argument("--lm_verifier_device", type=str, default="cpu", choices=["cpu", "cuda"], help="Device for LM verifier scorer")
-    ap.add_argument("--comet_accelerator", type=str, default="cpu", choices=["cpu", "gpu"], help="Accelerator used by COMET QE scorer")
+    ap.add_argument("--mt_device", type=str, default="cuda", choices=["cpu", "cuda"], help="Device for MT translator (defaults to CPU to save VRAM)")
+    ap.add_argument("--lm_verifier_device", type=str, default="cuda", choices=["cpu", "cuda"], help="Device for LM verifier scorer")
+    ap.add_argument("--comet_accelerator", type=str, default="gpu", choices=["cpu", "gpu"], help="Accelerator used by COMET QE scorer")
     # loss weights
     ap.add_argument("--x", type=float, default=1.0)
     ap.add_argument("--y", type=float, default=0.3)
