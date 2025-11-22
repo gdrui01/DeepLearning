@@ -49,8 +49,7 @@ A brief list of what still has to be implemented and/or tested:
 - Update PPO-Trainer to newest release, which might be beneficial for training (default lr_scheduler might be better than current implementation, which has not been tuned to the task at all!)
 - Run PPO with Adam optimizer
 ### Training Parameters
-- Generally, tune training parameters as some are currently still very conservative (batch size)
- 
+- Generally, tune training parameters as some are currently still very conservative (e.g. batch size)
 
 ---
 
