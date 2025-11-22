@@ -56,7 +56,6 @@ Note: First run will download pretrained models:
 breaking-MT/
 ├─ env.yaml                        # Conda environment specification
 ├─ requirements.txt                # Pip dependencies with exact versions
-├─ run.sh                          # SLURM job script for PPO training
 ├─ data/
 │  ├─ seeds.txt                    # English seed sentences for training
 │  └─ method2_results.jsonl        # (Optional) Analysis output from method2.py
@@ -68,12 +67,18 @@ breaking-MT/
 │  ├─ losses.py                    # Reward function implementation
 │  ├─ method2.py                   # (Optional) Analysis pipeline for reward computation
 │  ├─ gen_model.py                 # (Optional) Standalone LLM editor
+│  ├─ sft_lora.py                  # (Optional) Supervised fine-tuning with LoRA
 │  └─ __init__.py
+├─ scripts/
+│  ├─ run.sh                       # SLURM job script for PPO training
+│  ├─ verify.sh                    # SLURM script for model verification
+│  └─ test_model.sh                # SLURM script for model testing
+├─ test_scripts/
+│  ├─ test_model_inference.py      # Test script for model inference
+│  ├─ check_tokenizer.py           # Tokenizer verification utility
+│  └─ verify_gpt2_generation.py    # Generation quality verification
 ├─ checkpoints/
 │  └─ gpt2-ppo-method2/            # Saved PPO policy checkpoints
-├─ test_model_inference.py         # Test script for model inference
-├─ check_tokenizer.py              # Tokenizer verification utility
-├─ verify_gpt2_generation.py       # Generation quality verification
 └─ README.md
 ```
 
@@ -107,7 +112,7 @@ python -m src.RL_ppo_training \
 
 **SLURM cluster training:**
 ```bash
-sbatch run.sh
+sbatch scripts/run.sh
 ```
 
 The model will:
@@ -426,7 +431,7 @@ At the end of training, the script logs:
 
 ## SLURM Cluster Deployment
 
-The repository includes a production-ready SLURM script ([run.sh](run.sh)):
+The repository includes production-ready SLURM scripts in the [scripts/](scripts/) directory:
 
 ```bash
 #!/bin/bash
@@ -452,7 +457,7 @@ python -m src.RL_ppo_training \
 
 **Submit job:**
 ```bash
-sbatch run.sh
+sbatch scripts/run.sh
 ```
 
 **Monitor logs:**
@@ -680,24 +685,24 @@ wandb login
 
 **Check tokenizer:**
 ```bash
-python check_tokenizer.py
+python test_scripts/check_tokenizer.py
 ```
 
 **Test model inference:**
 ```bash
-python test_model_inference.py
+python test_scripts/test_model_inference.py
 ```
 
 **Verify generation:**
 ```bash
-bash verify.sh
+bash scripts/verify.sh
 # or
-python verify_gpt2_generation.py
+python test_scripts/verify_gpt2_generation.py
 ```
 
 **Test on SLURM:**
 ```bash
-bash test_model.sh
+bash scripts/test_model.sh
 ```
 
 ---
