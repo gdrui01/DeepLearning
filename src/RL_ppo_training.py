@@ -191,6 +191,13 @@ def main():
         # Don't specify torch_dtype - let it load in default precision (FP32)
         # Mixed precision training will handle the conversion for memory efficiency
     )
+
+    # DEBUG: Check if weights are actually loaded
+    print(f"Model loaded. Checking first layer weights...")
+    first_param = next(policy.pretrained_model.parameters())
+    print(f"First param shape: {first_param.shape}, mean: {first_param.mean().item():.6f}, std: {first_param.std().item():.6f}")
+    print(f"First param is on device: {first_param.device}")
+
     # Explicitly move to device
     if torch.cuda.is_available():
         policy = policy.to(device)
@@ -262,6 +269,21 @@ def main():
         repetition_penalty=1.0,  # Can be adjusted to reduce repetitions
     )
 
+    # ---- Test generation BEFORE training ----
+    print("\n" + "="*80)
+    print("TESTING MODEL GENERATION BEFORE TRAINING")
+    print("="*80)
+    test_prompt = DEFAULT_INSTRUCTION.format(seed="The cat sat on the mat.")
+    test_ids = tok(test_prompt, return_tensors="pt").input_ids.squeeze(0).to(trainer.accelerator.device)
+    policy.eval()  # Set to eval mode
+    with torch.no_grad():
+        test_output = policy.generate(test_ids.unsqueeze(0), max_new_tokens=50, do_sample=False)
+        test_response = tok.decode(test_output[0][len(test_ids):], skip_special_tokens=True)
+    print(f"Test prompt: {test_prompt[:100]}...")
+    print(f"Test output: {test_response}")
+    print("="*80 + "\n")
+    policy.train()  # Set back to train mode
+
     # ---- PPO loop ----
     n = len(prompts_all)
     print(f"Starting PPO: seeds={n}, steps={args.steps}, batch={args.batch_size}")
@@ -281,6 +303,9 @@ def main():
         # Clear cache before generation to maximize available memory
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+
+        # CRITICAL: Set model to eval mode during generation to disable dropout/layernorm randomness
+        trainer.model.eval()
         with torch.no_grad():
             for query in query_tensors:
                 gen_output = trainer.generate(query, **gen_kwargs)
@@ -313,6 +338,9 @@ def main():
                 # Clear cache after each generation to prevent memory accumulation
                 if torch.cuda.is_available() and len(response_tensors) % 2 == 0:  # Clear every 2 generations
                     torch.cuda.empty_cache()
+
+        # Set model back to train mode for PPO update
+        trainer.model.train()
 
         # 3) decode responses for reward computation
         cleaned = [tok.decode(r, skip_special_tokens=True).strip() for r in response_tensors]
