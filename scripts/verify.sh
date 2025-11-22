@@ -14,7 +14,7 @@ cd "$HOME/DeepLearning/"
 mkdir -p logs
 
 # Run model comparison: gpt2 vs google/flan-t5-small
-python verify_gpt2_generation.py \
+python test_scripts/verify_gpt2_generation.py \
   --compare \
   --compare_models google/flan-t5-base facebook/opt-iml-1.3b \
   --seed_sentence "They walked towards the park's entrance." \
