@@ -148,9 +148,10 @@ def main():
 
     # ---- policy + ref model (needed for tokenizer to build prompts) ----
     tok = AutoTokenizer.from_pretrained(args.base_model)
-    # Try to prevent tokenizer mismatch
-    tok.pad_token = tok.eos_token
-    tok.padding_side = "left"
+    # Qwen3 has its own pad token - only set it if missing (e.g., for GPT-2)
+    if tok.pad_token is None:
+        tok.pad_token = tok.eos_token
+    tok.padding_side = "left"  # Required for batch generation with causal LMs
 
     # ---- data ----
     seeds = read_seeds(args.seeds, args.k)
