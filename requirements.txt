@@ -1,0 +1,71 @@
+# Breaking-MT: RL Framework for Adversarial Machine Translation
+# Python 3.10 required
+# CUDA 12.6 required for GPU support
+
+# Core Deep Learning Framework
+torch==2.9.1+cu126
+torchvision==0.24.1+cu126
+torchaudio==2.9.1+cu126
+transformers==4.57.1
+accelerate==0.34.2
+peft==0.12.0
+trl==0.8.6
+
+# Data Processing
+datasets==2.21.0
+numpy==1.26.4
+pandas==2.3.3
+pyarrow==22.0.0
+
+# Evaluation & Scoring
+unbabel-comet==2.2.2
+sentencepiece==0.1.99
+sacremoses==0.1.1
+sacrebleu==2.5.1
+torchmetrics==0.10.3
+
+# Experiment Tracking (optional)
+wandb==0.23.0
+pytorch-lightning==2.5.6
+
+# Utilities
+tqdm==4.67.1
+pyyaml==6.0.3
+jinja2==3.1.6
+requests==2.32.5
+pillow==11.3.0
+protobuf==4.25.8
+regex==2025.11.3
+safetensors==0.6.2
+tokenizers==0.22.1
+filelock==3.19.1
+huggingface-hub==0.36.0
+packaging==25.0
+fsspec==2024.6.1
+typing_extensions==4.15.0
+
+# Additional ML utilities
+scipy==1.16.3
+joblib==1.5.2
+networkx==3.5
+sympy==1.14.0
+mpmath==1.3.0
+
+# System utilities
+click==8.3.1
+colorama==0.4.6
+markdown-it-py==4.0.0
+mdurl==0.1.2
+pygments==2.19.2
+rich==14.2.0
+tabulate==0.9.0
+psutil==7.1.3
+certifi==2025.11.12
+charset-normalizer==3.4.4
+idna==3.11
+urllib3==2.5.0
+python-dateutil==2.9.0.post0
+pytz==2025.2
+tzdata==2025.2
+six==1.17.0
+lxml==6.0.2

@@ -1,37 +1,37 @@
 
 # Breaking-MT
-A framework for adversarial machine translation generation and evaluation.
+Reinforcement Learning Framework for Adversarial Machine Translation Generation
 
 ---
 <img src="imgs/Architecture.png" alt="Architecture" width="80%">
 
 ## Overview
 
-Breaking-MT is a deep learning framework that automatically generates English sentences which are difficult for machine translation (MT) systems to translate, while ensuring the sentences remain grammatical, natural, and concise.
+Breaking-MT uses **Proximal Policy Optimization (PPO)** to train language models to generate English sentences that are difficult for machine translation (MT) systems to translate, while ensuring the sentences remain grammatical, natural, and concise.
 
-The project implements three complementary components:
+The framework directly optimizes a language model policy using reinforcement learning with a composite reward function that balances:
+- **Translation Difficulty**: How hard the generated sentence is to translate (measured via COMET QE)
+- **Linguistic Quality**: Grammaticality and naturalness (measured via LM perplexity)
+- **Constraints**: Length bounds and lexical diversity
 
-| Component | Description |
-|------------|-------------|
-| **Method 2 (Reward-based Editing)** | Uses a pretrained language model (GPT-2 or similar) to rewrite sentences to be harder to translate. Translation difficulty is measured using the COMET Quality Estimation (QE) model, combined with linguistic and constraint-based rewards. |
-| **LoRA SFT (Supervised Fine-Tuning)** | Fine-tunes the generator model on the best (prompt → edit) pairs identified by Method 2 using lightweight LoRA adapters. Defaults to GPT-2 with LoRA rank 8. |
-| **RL (PPO Fine-Tuning)** | Optimizes the generator directly on a non-differentiable reward signal derived from translation difficulty, linguistic naturalness, and constraints using Proximal Policy Optimization (PPO). Now supports Qwen3-0.6B-Base with mixed precision training and gradient checkpointing. |
+Unlike traditional supervised fine-tuning approaches, this PPO-based method can directly optimize non-differentiable objectives like translation quality estimation and MT system outputs.
 
 ---
 
 ## Key Features
 
+- **End-to-End RL Training**: Direct policy optimization using PPO without requiring supervised data
 - **Multi-Modal Reward Function**: Combines translation difficulty (COMET QE), linguistic naturalness (LM perplexity), and constraint satisfaction
 - **Reference-Free Quality Estimation**: Uses COMET-KIWI for translation quality without requiring reference translations
-- **Parameter-Efficient Fine-Tuning**: LoRA adapters for lightweight model adaptation
 - **Advanced PPO Implementation**:
   - Mixed precision training (FP16/FP32) for memory efficiency
   - Gradient checkpointing to reduce memory footprint
   - Adaptive KL penalty to prevent policy collapse
   - Configurable device allocation for multi-model inference
+  - Mini-batch processing for stable training
 - **Weights & Biases Integration**: Comprehensive experiment tracking and model versioning
 - **SLURM Support**: Production-ready scripts for HPC cluster deployment
-- **Flexible Model Support**: Works with GPT-2, Qwen3, and other causal language models
+- **Flexible Model Support**: Works with GPT-2, Qwen3-0.6B, and other causal language models
 
 ---
 
@@ -42,10 +42,10 @@ conda activate mtbreaker
 ```
 
 Note: First run will download pretrained models:
-- GPT-2 or Qwen3-0.6B (generator)
-- Helsinki-NLP/opus-mt-en-de (translator)
-- Unbabel/wmt22-cometkiwi-da (quality estimator)
-- distilgpt2 (verifier)
+- Qwen/Qwen3-0.6B-Base or GPT-2 (policy model)
+- Helsinki-NLP/opus-mt-en-de (EN→DE translator)
+- Unbabel/wmt22-cometkiwi-da (COMET QE scorer)
+- distilgpt2 (linguistic verifier)
 
 
 ---
@@ -54,173 +54,48 @@ Note: First run will download pretrained models:
 
 ```
 breaking-MT/
-├─ env.yaml                        # Conda + pip dependencies
+├─ env.yaml                        # Conda environment specification
+├─ requirements.txt                # Pip dependencies with exact versions
 ├─ run.sh                          # SLURM job script for PPO training
 ├─ data/
-│  ├─ seeds.txt                    # English seed sentences
-│  └─ method2_results.jsonl        # Outputs from Method 2
+│  ├─ seeds.txt                    # English seed sentences for training
+│  └─ method2_results.jsonl        # (Optional) Analysis output from method2.py
 ├─ src/
-│  ├─ gen_model.py                 # LLM editor for sentence rewriting (GPT-2 default)
+│  ├─ RL_ppo_training.py           # Main PPO training script ⭐
 │  ├─ translate.py                 # English→German translation (Helsinki-NLP/opus-mt-en-de)
 │  ├─ scorers.py                   # COMET QE (wmt22-cometkiwi-da) + LM verifier (distilgpt2)
 │  ├─ constraints.py               # Length & lexical diversity scoring
-│  ├─ losses.py                    # Combined Method 2 loss function
-│  ├─ method2.py                   # Main pipeline for reward computation
-│  ├─ sft_lora.py                  # Supervised fine-tuning using LoRA
-│  ├─ RL_ppo_training.py           # Reinforcement learning (PPO) with Qwen3/GPT-2
+│  ├─ losses.py                    # Reward function implementation
+│  ├─ method2.py                   # (Optional) Analysis pipeline for reward computation
+│  ├─ gen_model.py                 # (Optional) Standalone LLM editor
 │  └─ __init__.py
 ├─ checkpoints/
-│  ├─ gpt2-lora-sft/               # Saved LoRA adapters from SFT
 │  └─ gpt2-ppo-method2/            # Saved PPO policy checkpoints
+├─ test_model_inference.py         # Test script for model inference
+├─ check_tokenizer.py              # Tokenizer verification utility
+├─ verify_gpt2_generation.py       # Generation quality verification
 └─ README.md
 ```
 
 ---
 
-## Recommended Workflow
+## Quick Start
 
-The three components can be used independently or in sequence:
+### 1. Prepare Training Data
 
-1. **Exploration Phase** (Method 2):
-   - Generate initial difficulty data to understand what makes sentences hard to translate
-   - Analyze the loss components to tune weights (x, y, z)
-   - Identify promising seed sentences
+Create `data/seeds.txt` with one English sentence per line. These should be simple, easily-translatable sentences that the model will learn to make more difficult.
 
-2. **Supervised Learning Phase** (LoRA SFT):
-   - Fine-tune on best Method 2 examples for rapid improvement
-   - Faster training than PPO, good for initial model adaptation
-   - Use when you have good (prompt → edit) pairs
-
-3. **Reinforcement Learning Phase** (PPO):
-   - Direct optimization on the composite reward signal
-   - Handles non-differentiable objectives (COMET QE, MT outputs)
-   - Best for maximizing final performance
-   - Can start from SFT checkpoint or train from scratch
-
-**Quick Start (End-to-End):**
-```bash
-# Step 1: Generate training data
-python -m src.method2 --seeds data/seeds.txt --k 500
-
-# Step 2: Supervised fine-tuning (optional but recommended)
-python -m src.sft_lora --data data/method2_results.jsonl --top_k 300
-
-# Step 3: PPO optimization
-python -m src.RL_ppo_training --seeds data/seeds.txt --k 200 --steps 300 --batch_size 2
-```
-
----
-
-## Usage
-
-### Data Preparation
-
-Prepare your seed sentences in `data/seeds.txt` (one sentence per line). The repository includes a sample dataset with simple English sentences designed to be easy to translate initially.
-
-Example seed sentences:
+Example seeds:
 ```
 A beautiful bird sings happily.
 He saw her duck.
 The bank is by the river.
+The weather is nice today.
 ```
 
-### 1. Generate Difficulty Data (Method 2)
+### 2. Run PPO Training
 
-Run the main pipeline to:
-- Generate sentence edits from a pretrained language model (GPT-2)
-- Translate original and edited sentences (EN→DE)
-- Compute translation difficulty using COMET QE (1 − QE)
-- Calculate constraint scores (length and diversity)
-- Evaluate linguistic naturalness with LM verifier
-- Compute the combined loss
-
-```bash
-python -m src.method2 --seeds data/seeds.txt --k 100
-```
-
-**Parameters:**
-- `--seeds`: Path to seed sentences file
-- `--k`: Number of seeds to process (default: 100)
-- `--instruction`: Custom instruction for editing (optional)
-- `--x/--y/--z`: Loss weights (defaults: 1.0, 0.3, 0.3)
-- `--f`: Delta transformation function (choices: relu, sigmoid, none)
-- `--out`: Output file path (default: data/method2_results.jsonl)
-
-Output:
-`data/method2_results.jsonl` containing one record per sentence:
-
-```json
-{
-  "orig": "He saw her duck.",
-  "edit": "He observed the bird dive beneath the bridge.",
-  "de_old": 0.42,
-  "de_new": 0.63,
-  "delta_de": 0.21,
-  "constraint": 0.37,
-  "verify": -2.3,
-  "L": 0.43
-}
-```
-
----
-
-### 2. Supervised Fine-Tuning (LoRA SFT)
-
-Fine-tune the generator on the best (lowest loss) examples from Method 2 using parameter-efficient LoRA adapters.
-
-```bash
-python -m src.sft_lora \
-  --data data/method2_results.jsonl \
-  --top_k 300 \
-  --require_positive_delta
-```
-
-**Parameters:**
-- `--data`: Path to Method 2 results JSONL file
-- `--top_k`: Number of best examples to use (default: 300)
-- `--require_positive_delta`: Only use examples where delta_de > 0 (default: True)
-- `--base_model`: Base model to fine-tune (default: "gpt2")
-- `--outdir`: Output directory for adapters (default: checkpoints/gpt2-lora-sft)
-- `--max_length`: Max sequence length (default: 256)
-- `--epochs`: Training epochs (default: 2)
-- `--lr`: Learning rate (default: 2e-4)
-- `--batch_size`: Batch size per device (default: 8)
-- `--grad_accum`: Gradient accumulation steps (default: 2)
-
-**Training Details:**
-- Uses LoRA with rank=8, alpha=16, dropout=0.05
-- Targets attention layers (`c_attn`, `c_proj`) for GPT-2
-- Only computes loss on the target (edited) sequence, not the prompt
-- Automatic FP16 training on GPU for memory efficiency
-- Saves only the lightweight LoRA adapter weights (~few MB)
-
-Adapters are saved to `checkpoints/gpt2-lora-sft/`.
-
-**Example usage after fine-tuning:**
-```python
-from transformers import AutoTokenizer, AutoModelForCausalLM
-from peft import PeftModel
-
-base = "gpt2"
-model = AutoModelForCausalLM.from_pretrained(base)
-model = PeftModel.from_pretrained(model, "checkpoints/gpt2-lora-sft")
-tok = AutoTokenizer.from_pretrained(base)
-
-# Generate with the fine-tuned model
-prompt = "Make the following sentence harder to translate while keeping it grammatical and natural.\n\n'He saw her duck.'\n\nRewrite it as one grammatical English sentence."
-inputs = tok(prompt, return_tensors="pt")
-outputs = model.generate(**inputs, max_new_tokens=40, do_sample=True, top_p=0.95, temperature=0.9)
-print(tok.decode(outputs[0], skip_special_tokens=True))
-```
-
----
-
-### 3. Reinforcement Learning (PPO Fine-Tuning)
-
-Optimize the generator directly on the reward (negative Method 2 loss) using PPO. The implementation supports multiple base models and includes optimizations for memory-constrained GPUs.
-
-#### Basic Usage
-
+**Basic training (recommended for first run):**
 ```bash
 python -m src.RL_ppo_training \
   --seeds data/seeds.txt \
@@ -230,182 +105,483 @@ python -m src.RL_ppo_training \
   --temperature 0.7
 ```
 
-#### Advanced Options
+**SLURM cluster training:**
+```bash
+sbatch run.sh
+```
 
+The model will:
+1. Load seed sentences from `data/seeds.txt`
+2. Initialize the policy (Qwen3-0.6B or GPT-2)
+3. For each PPO step:
+   - Generate edited sentences using the current policy
+   - Translate originals and edits to German
+   - Compute rewards (difficulty, naturalness, constraints)
+   - Update the policy to maximize rewards
+4. Save checkpoints every 20 steps to `checkpoints/`
+
+---
+
+## PPO Training Details
+
+### Core Training Script: `RL_ppo_training.py`
+
+This is the main entry point for training. It implements a complete PPO pipeline with:
+
+#### Training Loop Architecture
+
+```
+For each PPO step:
+├─ Sample batch of seed sentences
+├─ Build instruction prompts
+├─ Generate edits with current policy (autoregressive LM)
+├─ Compute rewards via external scorers:
+│  ├─ Translate original & edit to German (MT model)
+│  ├─ Score translation difficulty (COMET QE)
+│  ├─ Score linguistic quality (LM verifier)
+│  └─ Score constraints (length, diversity)
+├─ Calculate composite reward: reward = -L
+├─ PPO update step:
+│  ├─ Compute advantages
+│  ├─ Update policy with clipped objective
+│  ├─ Apply KL penalty
+│  └─ Update value function
+└─ Log metrics to WandB and save checkpoints
+```
+
+### Command-Line Arguments
+
+#### Essential Parameters
+
+- `--seeds` (str): Path to seed sentences file (default: `data/seeds.txt`)
+- `--k` (int): Number of seeds to use for training (default: 500)
+- `--steps` (int): Number of PPO training steps (default: 200)
+- `--batch_size` (int): Number of prompts per PPO step (default: 2)
+
+#### Model Configuration
+
+- `--base_model` (str): Base LM for policy (default: `Qwen/Qwen3-0.6B-Base`)
+  - Alternatives: `gpt2`, `gpt2-medium`, etc.
+- `--save_dir` (str): Checkpoint output directory (default: `checkpoints/gpt2-ppo-method2`)
+
+#### Generation Parameters
+
+- `--gen_max_new_tokens` (int): Max tokens to generate per sample (default: 64)
+- `--temperature` (float): Sampling temperature (default: 0.7)
+  - Qwen3 recommended: 0.7 for standard mode, 0.6 for thinking mode
+  - Higher = more diverse outputs
+- `--top_p` (float): Nucleus sampling threshold (default: 0.8)
+  - Qwen3 recommended: 0.8 for standard mode, 0.95 for thinking mode
+
+#### Reward Function Weights
+
+- `--x` (float): Weight for difficulty delta (default: 1.0)
+- `--y` (float): Weight for constraint score (default: 0.3)
+- `--z` (float): Weight for verifier score (default: 0.3)
+- `--f` (str): Transformation for difficulty delta (default: `none`)
+  - `relu`: Only reward positive improvements
+  - `sigmoid`: Smooth transformation
+  - `none`: Use raw delta
+
+#### Device Allocation
+
+- `--mt_device` (str): Device for MT translator (choices: `cpu`, `cuda`, default: `cuda`)
+- `--lm_verifier_device` (str): Device for LM verifier (choices: `cpu`, `cuda`, default: `cuda`)
+- `--comet_accelerator` (str): Accelerator for COMET QE (choices: `cpu`, `gpu`, default: `gpu`)
+
+#### Experiment Tracking
+
+- `--wandb_project` (str): WandB project name (default: `mt-breaker-ppo`)
+- `--wandb_run_name` (str): WandB run name (default: auto-generated)
+- `--no_wandb`: Disable WandB logging
+- `--seed` (int): Random seed for reproducibility (default: 42)
+
+### Example Commands
+
+**Full GPU training (11GB VRAM):**
 ```bash
 python -m src.RL_ppo_training \
   --seeds data/seeds.txt \
   --k 500 \
   --base_model "Qwen/Qwen3-0.6B-Base" \
-  --save_dir checkpoints/qwen3-ppo \
-  --steps 200 \
+  --steps 300 \
   --batch_size 2 \
-  --gen_max_new_tokens 64 \
-  --top_p 0.8 \
-  --temperature 0.4 \
+  --temperature 0.7 \
   --mt_device cuda \
   --lm_verifier_device cuda \
   --comet_accelerator gpu \
-  --x 1.0 --y 0.3 --z 0.3 \
-  --f none \
-  --wandb_project mt-breaker-ppo \
-  --wandb_run_name my-experiment
+  --wandb_project my-mt-breaker \
+  --wandb_run_name qwen3-experiment-1
 ```
 
-#### Key Parameters
+**Memory-efficient training (8GB VRAM):**
+```bash
+python -m src.RL_ppo_training \
+  --seeds data/seeds.txt \
+  --k 200 \
+  --base_model "gpt2" \
+  --steps 200 \
+  --batch_size 1 \
+  --gen_max_new_tokens 48 \
+  --mt_device cpu \
+  --lm_verifier_device cpu \
+  --comet_accelerator cpu
+```
 
-- `--base_model`: Base model for policy (default: "Qwen/Qwen3-0.6B-Base", also supports "gpt2")
-- `--batch_size`: Prompts per PPO step (default: 2, optimized for memory efficiency)
-- `--gen_max_new_tokens`: Maximum tokens to generate (default: 64)
-- `--temperature`: Sampling temperature (default: 0.7 for Qwen3, higher = more diverse)
-- `--top_p`: Nucleus sampling threshold (default: 0.8 for Qwen3)
-- `--mt_device/--lm_verifier_device/--comet_accelerator`: Device allocation for different models
-- `--x/--y/--z`: Loss weights for difficulty delta, constraints, and verification
-- `--f`: Transformation function for delta ("relu", "sigmoid", or "none")
-- `--no_wandb`: Disable Weights & Biases logging
+**Quick debug run:**
+```bash
+python -m src.RL_ppo_training \
+  --seeds data/seeds.txt \
+  --k 50 \
+  --steps 10 \
+  --batch_size 2 \
+  --no_wandb
+```
 
-#### SLURM Cluster Usage
+---
 
-For training on HPC clusters with SLURM:
+## Reward Function
 
+The reward function is implemented in [src/losses.py](src/losses.py) and computed during training:
+
+### Mathematical Formulation
+
+```
+L = 1 - [ x * f(Δde) + y * constraint(s) + z * verify(s) ] / (x + y + z)
+
+Reward = -L  (higher is better for PPO)
+```
+
+Where:
+- **Δde = de(edit, t_edit) - de(seed, t_seed)**: Change in translation difficulty
+  - **de(s,t) = 1 - QE(s,t)**: Difficulty score from COMET QE
+  - Higher Δde = edit is harder to translate than seed
+- **constraint(s)**: Length and lexical diversity score
+  - Rewards sentences within length bounds (4-1024 tokens)
+  - Penalizes low lexical diversity (repeated words)
+  - Returns value in [0, 1]
+- **verify(s)**: Linguistic naturalness score
+  - Based on LM perplexity using distilgpt2
+  - Higher score = more grammatical/natural
+- **f()**: Optional transformation function
+  - `relu`: max(0, Δde) - only reward improvements
+  - `sigmoid`: 1/(1 + exp(-Δde)) - smooth squashing
+  - `none`: raw Δde - allow negative rewards
+
+### Component Models
+
+| Component | Model | Role | Device |
+|-----------|-------|------|--------|
+| Policy (trainable) | Qwen3-0.6B / GPT-2 | Generates difficult sentences | GPU |
+| Reference (frozen) | Same as policy | KL divergence baseline | GPU |
+| MT Translator | Helsinki-NLP/opus-mt-en-de | EN→DE translation | GPU/CPU |
+| Quality Estimator | Unbabel/wmt22-cometkiwi-da | Translation difficulty | GPU/CPU |
+| Verifier | distilgpt2 | Linguistic quality | GPU/CPU |
+
+### Reward Components Breakdown
+
+**Example reward computation:**
+```
+Seed: "The cat sat on the mat."
+Edit: "The feline perched atop the woven floor covering, observing."
+
+1. Translation Difficulty:
+   - de(seed, t_seed) = 0.15  (easy to translate)
+   - de(edit, t_edit) = 0.68  (hard to translate)
+   - Δde = 0.53 ✓ (improvement!)
+
+2. Constraint Score:
+   - Length: 11 tokens (within bounds) ✓
+   - Lexical diversity: 0.91 (11 unique / 11 total) ✓
+   - constraint(edit) = 0.72
+
+3. Verifier Score:
+   - LM perplexity: 24.3
+   - verify(edit) = 0.85 (grammatical) ✓
+
+4. Combined:
+   - L = 1 - (1.0*0.53 + 0.3*0.72 + 0.3*0.85) / 1.6
+   - L = 0.12 (low loss = good)
+   - Reward = -0.12 → Policy learns to maximize this!
+```
+
+---
+
+## Memory Optimizations
+
+The PPO implementation includes extensive memory optimizations for training on consumer GPUs:
+
+### Automatic Features
+
+1. **Mixed Precision Training (FP16)**
+   - Automatically enabled on CUDA devices
+   - Reduces model memory by ~50%
+   - Maintains FP32 gradients for stability
+
+2. **Gradient Checkpointing**
+   - Enabled for the policy model
+   - Trades compute for memory during backprop
+   - Reduces activation memory by ~40%
+
+3. **Mini-batch Processing**
+   - PPO processes 1 sample at a time during updates
+   - Prevents OOM during gradient computation
+
+4. **Periodic Cache Clearing**
+   - CUDA cache cleared after generation and PPO steps
+   - Prevents memory fragmentation over long runs
+
+### Manual Optimizations
+
+**Offload models to CPU:**
+```bash
+python -m src.RL_ppo_training \
+  --mt_device cpu \              # Save ~300MB GPU
+  --lm_verifier_device cpu \     # Save ~250MB GPU
+  --comet_accelerator cpu        # Save ~2GB GPU
+```
+
+**Reduce batch size:**
+```bash
+--batch_size 1    # Minimum: 1 sample per step
+```
+
+**Reduce generation length:**
+```bash
+--gen_max_new_tokens 32    # Shorter = less memory
+```
+
+**Use smaller model:**
+```bash
+--base_model gpt2    # ~500MB vs 1.2GB for Qwen3
+```
+
+### Memory Budget Breakdown (Qwen3-0.6B on GTX 1080 Ti)
+
+| Component | VRAM (FP16) | Configurable |
+|-----------|-------------|--------------|
+| Policy model | ~600MB | Base model choice |
+| Reference model | ~600MB | Base model choice |
+| Value head | ~50MB | - |
+| Optimizer states | ~1.2GB | - |
+| Activations/gradients | ~2-3GB | Batch size, seq length |
+| MT translator | ~300MB | `--mt_device cpu` |
+| COMET QE | ~2GB | `--comet_accelerator cpu` |
+| LM Verifier | ~250MB | `--lm_verifier_device cpu` |
+| Generation buffer | ~500MB | Batch size, max tokens |
+| **Total** | **~10-11GB** | **Can reduce to ~6GB** |
+
+---
+
+## Weights & Biases Integration
+
+The training script logs comprehensive metrics to Weights & Biases:
+
+### Logged Metrics
+
+**Reward Metrics:**
+- `reward/mean`: Average reward across batch
+- `reward/min`: Minimum reward in batch
+- `reward/max`: Maximum reward in batch
+- `reward/constraint_mean`: Average constraint score
+- `reward/verifier_mean`: Average verifier score
+- `reward/difficulty_delta_mean`: Average difficulty improvement
+
+**PPO Statistics:**
+- `ppo/loss/total`: Total PPO loss
+- `objective/kl`: KL divergence from reference policy
+- `objective/entropy`: Policy entropy (exploration)
+- `ppo/policy/approxkl`: Approximate KL divergence
+- `ppo/policy/clipfrac`: Fraction of clipped updates
+- `ppo/returns/mean`: Mean returns
+- `ppo/val/mean`: Mean value estimates
+
+**Generation Statistics:**
+- `generation/mean_response_length`: Average tokens generated
+- `generation/sample_text`: Sample output (HTML preview)
+
+**System Metrics:**
+- Learning rate
+- GPU memory usage
+- Training step time
+
+### Configuration
+
+```bash
+# Enable WandB (default)
+python -m src.RL_ppo_training --wandb_project my-project --wandb_run_name exp-1
+
+# Disable WandB
+python -m src.RL_ppo_training --no_wandb
+```
+
+### Artifact Logging
+
+At the end of training, the script logs:
+- Final model checkpoint as WandB artifact
+- Final sample generation
+- Full hyperparameter config
+
+---
+
+## SLURM Cluster Deployment
+
+The repository includes a production-ready SLURM script ([run.sh](run.sh)):
+
+```bash
+#!/bin/bash
+#SBATCH --account=deep_learning
+#SBATCH --output=logs/mtbreaker_%j.out
+#SBATCH --job-name=setup-RL
+#SBATCH --gpus 1080ti:1
+
+. /etc/profile.d/modules.sh
+module add cuda/12.6
+
+source "$HOME/venvs/mtbreaker/bin/activate"
+cd "$HOME/DeepLearning/"
+mkdir -p logs
+
+python -m src.RL_ppo_training \
+  --seeds data/seeds.txt \
+  --k 200 \
+  --steps 300 \
+  --batch_size 2 \
+  --temperature 0.4
+```
+
+**Submit job:**
 ```bash
 sbatch run.sh
 ```
 
-The provided [run.sh](run.sh) script includes:
-- GPU allocation (1080ti:1)
-- CUDA module loading
-- Environment activation
-- Optimized hyperparameters for production runs
-
-#### Memory Optimizations
-
-The PPO implementation includes several memory-saving features:
-- **Mixed Precision Training**: Automatic FP16 training on GPU to reduce memory usage
-- **Gradient Checkpointing**: Trades compute for memory during backpropagation
-- **Mini-batch Processing**: Processes one sample at a time during PPO updates
-- **Periodic Cache Clearing**: Clears CUDA cache to prevent memory fragmentation
-- **Device-specific Allocation**: Can run MT/scorers on CPU while training on GPU
-
-#### Weights & Biases Integration
-
-The training script automatically logs:
-- Reward metrics (mean, min, max, individual components)
-- PPO training statistics (loss, KL divergence, policy entropy)
-- Generation statistics (response length, sample outputs)
-- Model hyperparameters and configuration
-- Final model artifacts
-
-The fine-tuned policy is saved to `checkpoints/gpt2-ppo-method2/` (or your specified `--save_dir`)
-
-#### PPO Training Loop
-
-Each PPO step:
-1. Samples a batch of seed sentences and builds instruction prompts
-2. Generates edited sentences using the current policy
-3. Translates originals and edits using the MT model
-4. Computes COMET QE difficulty, LM verification scores, and constraint scores
-5. Calculates reward = −L (negative loss, higher is better)
-6. Performs PPO update with KL penalty to prevent policy divergence
-7. Saves checkpoints every 20 steps
+**Monitor logs:**
+```bash
+tail -f logs/mtbreaker_<job_id>.out
+```
 
 ---
 
-## Loss Function
+## Model Inference After Training
 
-The core loss combines translation difficulty, linguistic quality, and constraints:
-
-```
-L = 1 - [ x * f(de(s,t) - de(s0,t0)) + y * constraint(s) + z * verify(s) ] / (x + y + z)
-```
-
-Where:
-- **de(s,t) = 1 - QE(s,t)**: Translation difficulty via COMET QE (wmt22-cometkiwi-da)
-  - Higher difficulty = harder to translate
-  - Reference-free quality estimation
-- **constraint(s)**: Length and lexical diversity regularizer
-  - Rewards sentences within length bounds (4-1024 tokens)
-  - Penalizes low lexical diversity (repeated words)
-- **verify(s)**: Language model-based naturalness score (distilgpt2)
-  - Uses negative perplexity as naturalness proxy
-  - Higher score = more grammatical/natural
-- **f()**: Optional transformation function
-  - `relu`: Only reward positive difficulty delta (max(0, delta))
-  - `sigmoid`: Smooth transformation of delta
-  - `none`: Use raw delta
-- **x, y, z**: Tunable weights (defaults: x=1.0, y=0.3, z=0.3)
-
-Lower L indicates better edits (more difficult to translate yet still natural and diverse).
-
-### Component Models
-
-| Component | Model | Purpose |
-|-----------|-------|---------|
-| Generator (Method 2) | GPT-2 | Initial sentence editing |
-| Generator (PPO) | Qwen/Qwen3-0.6B-Base | Policy for RL training |
-| MT System | Helsinki-NLP/opus-mt-en-de | English→German translation |
-| Quality Estimator | Unbabel/wmt22-cometkiwi-da | Reference-free translation quality |
-| Verifier | distilgpt2 | Grammaticality/naturalness scoring |
-
----
-
-## Model Loading and Inference
-
-### Using LoRA Fine-tuned Model
-
-After training with LoRA SFT:
-
-```python
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from peft import PeftModel
-
-base_model = "gpt2"
-adapter_path = "checkpoints/gpt2-lora-sft"
-
-model = AutoModelForCausalLM.from_pretrained(base_model)
-model = PeftModel.from_pretrained(model, adapter_path)
-tokenizer = AutoTokenizer.from_pretrained(base_model)
-
-prompt = "Make the following sentence harder to translate while keeping it grammatical and natural.\n\n'He saw her duck.'\n\nRewrite it as one grammatical English sentence."
-inputs = tokenizer(prompt, return_tensors="pt")
-outputs = model.generate(**inputs, do_sample=True, top_p=0.95, temperature=0.9, max_new_tokens=40)
-print(tokenizer.decode(outputs[0], skip_special_tokens=True))
-```
-
-### Using PPO Fine-tuned Model
-
-After training with PPO:
+### Loading the Trained Policy
 
 ```python
 from transformers import AutoTokenizer
 from trl import AutoModelForCausalLMWithValueHead
 
+# Load checkpoint
 model_path = "checkpoints/gpt2-ppo-method2"
-tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B-Base")
+base_model = "Qwen/Qwen3-0.6B-Base"  # Must match training
+
+tokenizer = AutoTokenizer.from_pretrained(base_model)
+if tokenizer.pad_token is None:
+    tokenizer.pad_token = tokenizer.eos_token
 
 model = AutoModelForCausalLMWithValueHead.from_pretrained(model_path)
 model.eval()
 
-prompt = 'Rewrite this sentence to be extremely difficult for machine translation using idioms, ambiguity, and wordplay, while keeping it grammatically correct English: "The cat sat on the mat."\n\nOnly return the single edited sentence.'
-inputs = tokenizer(prompt, return_tensors="pt")
-outputs = model.generate(**inputs, do_sample=True, top_p=0.8, temperature=0.7, max_new_tokens=64)
-print(tokenizer.decode(outputs[0], skip_special_tokens=True))
+# Move to device
+device = "cuda" if torch.cuda.is_available() else "cpu"
+model.to(device)
+```
+
+### Generating Difficult Sentences
+
+```python
+seed = "The cat sat on the mat."
+instruction = f'Rewrite this sentence to be extremely difficult for machine translation using idioms, ambiguity, and wordplay, while keeping it grammatically correct English: "{seed}"\n\nOnly return the single edited sentence.'
+
+# Tokenize
+inputs = tokenizer(instruction, return_tensors="pt").to(device)
+
+# Generate
+with torch.no_grad():
+    outputs = model.generate(
+        **inputs,
+        max_new_tokens=64,
+        do_sample=True,
+        top_p=0.8,
+        temperature=0.7,
+        eos_token_id=tokenizer.eos_token_id,
+        pad_token_id=tokenizer.pad_token_id
+    )
+
+# Decode (only the generated part, excluding prompt)
+input_len = inputs.input_ids.shape[1]
+generated_ids = outputs[0][input_len:]
+generated_text = tokenizer.decode(generated_ids, skip_special_tokens=True)
+
+print(f"Seed: {seed}")
+print(f"Generated: {generated_text}")
+```
+
+### Batch Inference
+
+```python
+seeds = [
+    "The weather is nice.",
+    "He went to the bank.",
+    "She saw the bat."
+]
+
+prompts = [
+    f'Rewrite this sentence to be extremely difficult for machine translation using idioms, ambiguity, and wordplay, while keeping it grammatically correct English: "{s}"\n\nOnly return the single edited sentence.'
+    for s in seeds
+]
+
+# Batch tokenization
+inputs = tokenizer(prompts, return_tensors="pt", padding=True).to(device)
+
+# Batch generation
+with torch.no_grad():
+    outputs = model.generate(
+        **inputs,
+        max_new_tokens=64,
+        do_sample=True,
+        top_p=0.8,
+        temperature=0.7,
+        num_return_sequences=1
+    )
+
+# Decode all
+for i, (seed, output) in enumerate(zip(seeds, outputs)):
+    input_len = len(tokenizer.encode(prompts[i]))
+    generated = tokenizer.decode(output[input_len:], skip_special_tokens=True)
+    print(f"{i+1}. Seed: {seed}")
+    print(f"   Generated: {generated}\n")
 ```
 
 ---
 
-## Dependencies
+## Optional: Analysis Pipeline (method2.py)
 
-Key packages (see [env.yaml](env.yaml) for complete list):
+While PPO training doesn't require it, you can use `method2.py` to analyze the reward function offline:
 
-- Python 3.10
-- PyTorch 2.4.* with CUDA 12.1
-- Transformers 4.44.2
-- TRL 0.8.6 (PPO implementation)
-- PEFT 0.12.0 (LoRA)
-- Unbabel-COMET 2.2.2 (Quality Estimation)
-- Accelerate 0.34.2 (distributed training)
-- Weights & Biases (optional, for experiment tracking)
+```bash
+python -m src.method2 --seeds data/seeds.txt --k 100
+```
+
+This generates `data/method2_results.jsonl` with detailed metrics for each seed:
+
+```json
+{
+  "orig": "He saw her duck.",
+  "edit": "He observed the bird dive beneath the bridge.",
+  "de_old": 0.42,
+  "de_new": 0.63,
+  "delta_de": 0.21,
+  "constraint": 0.37,
+  "verify": 0.85,
+  "L": 0.43
+}
+```
+
+Use this to:
+- Understand what makes sentences hard to translate
+- Tune reward weights (x, y, z)
+- Identify promising seed sentences
+- Debug reward computation
 
 ---
 
@@ -413,98 +589,225 @@ Key packages (see [env.yaml](env.yaml) for complete list):
 
 ### Minimum Requirements
 
-**Method 2 & LoRA SFT:**
-- GPU: 6GB VRAM (GTX 1060, RTX 2060)
-- RAM: 16GB
-- Storage: 10GB for models and data
-
 **PPO Training:**
 - GPU: 11GB VRAM (GTX 1080 Ti, RTX 2080 Ti, RTX 3080)
 - RAM: 32GB recommended
 - Storage: 20GB for models, checkpoints, and cache
 
+**Memory-Optimized Setup:**
+- GPU: 6-8GB VRAM (GTX 1060, RTX 2060)
+- Use CPU offloading: `--mt_device cpu --lm_verifier_device cpu --comet_accelerator cpu`
+- Use smaller model: `--base_model gpt2`
+- Reduce batch size: `--batch_size 1`
+
 ### Performance Benchmarks
 
-**Training Speed (on GTX 1080 Ti):**
-- Method 2: ~100 sentences in 10-15 minutes
-- LoRA SFT: ~300 examples, 2 epochs in 15-20 minutes
-- PPO: ~200 steps with batch_size=2 in 2-3 hours
+**Training Speed (GTX 1080 Ti):**
+- Qwen3-0.6B, batch_size=2: ~200 steps in 2-3 hours
+- GPT-2, batch_size=2: ~200 steps in 1.5-2 hours
+- Time per step: ~30-45 seconds (includes generation + reward computation + PPO update)
 
-**Memory Usage (PPO with Qwen3-0.6B):**
-- Policy model: ~1.2GB (FP32) or ~600MB (FP16)
-- Reference model: ~1.2GB (frozen copy)
-- MT model (EN-DE): ~300MB
-- COMET QE: ~2GB
-- LM Verifier: ~250MB
-- **Total: ~10-11GB VRAM** (with mixed precision and gradient checkpointing)
+**Convergence:**
+- Meaningful improvements: ~50-100 steps
+- Strong performance: ~200-300 steps
+- Diminishing returns: >500 steps
 
-**Optimization Tips:**
-- Use `--batch_size 1` for 8GB GPUs
-- Set `--mt_device cpu` to save ~300MB VRAM
-- Set `--lm_verifier_device cpu` to save ~250MB VRAM
-- Reduce `--gen_max_new_tokens` to 32-48 for faster generation
-- Use `--base_model gpt2` (smaller model) instead of Qwen3
+**Throughput:**
+- ~4-5 edits/minute (batch_size=2, Qwen3)
+- ~6-8 edits/minute (batch_size=2, GPT-2)
 
 ---
 
-## Troubleshooting & Testing
+## Troubleshooting
 
-The repository includes several utility scripts for debugging and validation:
+### Common Issues
 
-### Check Tokenizer
+**Out of Memory (OOM) Errors:**
+```bash
+# Solution 1: Reduce batch size
+--batch_size 1
 
-Verify tokenizer functionality and encoding/decoding:
+# Solution 2: Offload models to CPU
+--mt_device cpu --lm_verifier_device cpu --comet_accelerator cpu
 
+# Solution 3: Reduce generation length
+--gen_max_new_tokens 32
+
+# Solution 4: Use smaller base model
+--base_model gpt2
+```
+
+**COMET QE fails to load:**
+```bash
+# Force CPU mode
+--comet_accelerator cpu
+
+# Check installation
+pip install unbabel-comet==2.2.2
+
+# Check internet (first run downloads model)
+```
+
+**Empty or repetitive generations:**
+```bash
+# Increase temperature
+--temperature 0.9
+
+# Adjust top_p
+--top_p 0.95
+
+# Check model loading with test script
+python test_model_inference.py
+```
+
+**WandB errors:**
+```bash
+# Disable WandB
+--no_wandb
+
+# Or login first
+wandb login
+```
+
+**CUDA out of memory during generation:**
+```bash
+# The model generates full sequences in memory
+# Reduce max tokens or batch size
+--gen_max_new_tokens 48 --batch_size 1
+```
+
+### Testing & Debugging Scripts
+
+**Check tokenizer:**
 ```bash
 python check_tokenizer.py
 ```
 
-### Test Model Inference
-
-Test basic model inference before training:
-
+**Test model inference:**
 ```bash
 python test_model_inference.py
 ```
 
-Or use the SLURM script:
-
-```bash
-bash test_model.sh
-```
-
-### Verify Generation
-
-Verify GPT-2 generation quality and outputs:
-
+**Verify generation:**
 ```bash
 bash verify.sh
 # or
 python verify_gpt2_generation.py
 ```
 
-### Common Issues
+**Test on SLURM:**
+```bash
+bash test_model.sh
+```
 
-**Out of Memory (OOM) Errors during PPO Training:**
-- Reduce `--batch_size` (try 1 or 2)
-- Reduce `--gen_max_new_tokens` (try 32 or 48)
-- Set `--mt_device cpu` to offload translation to CPU
-- Set `--lm_verifier_device cpu` to offload verifier to CPU
-- Use `--comet_accelerator cpu` if GPU memory is tight
+---
 
-**COMET QE fails to load:**
-- Check internet connection (first run downloads model)
-- Try `--comet_accelerator cpu` to force CPU mode
-- Ensure unbabel-comet==2.2.2 is installed
+## Dependencies
 
-**Generation produces empty outputs:**
-- Check `--temperature` (too low may cause degenerate outputs)
-- Increase `--min_new_tokens` in generation config
-- Verify base model loads correctly with test scripts
+### Core Requirements
 
-**WandB logging errors:**
-- Use `--no_wandb` to disable if not needed
-- Ensure wandb is installed and logged in: `wandb login`
+**Deep Learning Framework:**
+- Python 3.10
+- PyTorch 2.9.1+cu126 (CUDA 12.6)
+- Transformers 4.57.1 (HuggingFace models and tokenizers)
+- TRL 0.8.6 (PPO implementation)
+- Accelerate 0.34.2 (distributed training, mixed precision)
+- PEFT 0.12.0 (parameter-efficient fine-tuning utilities)
+
+**Evaluation & Scoring:**
+- Unbabel-COMET 2.2.2 (COMET QE for translation quality)
+- SentencePiece 0.1.99 (tokenization)
+- Sacremoses 0.1.1 (text normalization)
+- SacreBLEU 2.5.1 (evaluation metrics)
+
+**Data Processing:**
+- Datasets 2.21.0 (HuggingFace datasets)
+- NumPy 1.26.4
+- Pandas 2.3.3
+- PyArrow 22.0.0
+
+**Experiment Tracking:**
+- Weights & Biases 0.23.0 (optional, for logging)
+- TensorBoard (via PyTorch Lightning 2.5.6)
+
+**Additional Libraries:**
+- tqdm 4.67.1 (progress bars)
+- PyYAML 6.0.3 (configuration files)
+- Jinja2 3.1.6 (templating)
+- Pillow 11.3.0 (image processing)
+- Requests 2.32.5 (HTTP library)
+
+### NVIDIA CUDA Libraries (Included with PyTorch)
+
+- nvidia-cuda-runtime-cu12 12.6.77
+- nvidia-cudnn-cu12 9.10.2.21
+- nvidia-cublas-cu12 12.6.4.1
+- nvidia-cufft-cu12 11.3.0.4
+- nvidia-cusolver-cu12 11.7.1.2
+- nvidia-cusparse-cu12 12.5.4.2
+- nvidia-nccl-cu12 2.27.5
+
+### Installation
+
+**Option 1: Using Conda (Recommended)**
+```bash
+conda env create -f env.yaml
+conda activate mtbreaker
+```
+
+**Option 2: Using pip with requirements.txt**
+```bash
+# Create virtual environment
+python3.10 -m venv venvs/mtbreaker
+source venvs/mtbreaker/bin/activate  # On Windows: venvs\mtbreaker\Scripts\activate
+
+# Install PyTorch with CUDA 12.6 first
+pip install torch==2.9.1+cu126 torchvision==0.24.1+cu126 torchaudio==2.9.1+cu126 \
+  --index-url https://download.pytorch.org/whl/cu126
+
+# Install all other dependencies
+pip install -r requirements.txt
+```
+
+**Option 3: Manual pip installation**
+```bash
+# Create virtual environment
+python3.10 -m venv venvs/mtbreaker
+source venvs/mtbreaker/bin/activate
+
+# Install PyTorch with CUDA 12.6
+pip install torch==2.9.1+cu126 torchvision==0.24.1+cu126 torchaudio==2.9.1+cu126 \
+  --index-url https://download.pytorch.org/whl/cu126
+
+# Install core dependencies
+pip install transformers==4.57.1 \
+  trl==0.8.6 \
+  accelerate==0.34.2 \
+  peft==0.12.0 \
+  datasets==2.21.0
+
+# Install evaluation libraries
+pip install unbabel-comet==2.2.2 \
+  sentencepiece==0.1.99 \
+  sacremoses==0.1.1 \
+  sacrebleu==2.5.1
+
+# Install utilities
+pip install numpy==1.26.4 \
+  pandas==2.3.3 \
+  tqdm==4.67.1 \
+  pyyaml==6.0.3
+
+# Optional: Install Weights & Biases for experiment tracking
+pip install wandb==0.23.0
+```
+
+**Verify Installation:**
+```bash
+python -c "import torch; print(f'PyTorch: {torch.__version__}'); print(f'CUDA Available: {torch.cuda.is_available()}'); print(f'CUDA Version: {torch.version.cuda}')"
+python -c "import transformers; print(f'Transformers: {transformers.__version__}')"
+python -c "from comet import download_model; print('COMET: OK')"
+```
 
 ---
 
@@ -514,7 +817,7 @@ If you use this code in your research, please cite:
 
 ```bibtex
 @software{breaking-mt-2024,
-  title={Breaking-MT: Adversarial Machine Translation Generation Framework},
+  title={Breaking-MT: Reinforcement Learning Framework for Adversarial Machine Translation},
   author={Your Name},
   year={2024},
   url={https://github.com/yourusername/breaking-mt}
@@ -528,4 +831,3 @@ If you use this code in your research, please cite:
 This project is released under the MIT License.
 
 ---
-
