@@ -11,10 +11,10 @@ import wandb
 from transformers import AutoTokenizer, get_linear_schedule_with_warmup
 from trl import PPOConfig, PPOTrainer, AutoModelForCausalLMWithValueHead
 
-from .translate import MTEnDe
-from .scorers import COMETQE, LMVerifier
-from .constraints import constraint_score
-from .losses import method2_loss
+from translate import MTEnDe
+from scorers import COMETQE, LMVerifier
+from constraints import constraint_score
+from losses import method2_loss
 
 
 DEFAULT_BASE = "Qwen/Qwen3-0.6B-Base"
@@ -133,6 +133,9 @@ def main():
     # ---- initialize wandb ----
     use_wandb = not args.no_wandb
     if use_wandb:
+        if os.path.exists("wandb.key"):
+            with open("wandb.key") as f:
+                wandb.login(key=f.read().strip())
         wandb.init(
             project=args.wandb_project,
             name=args.wandb_run_name,
@@ -172,7 +175,7 @@ def main():
 
     # ---- external scorers ----
     mt = MTEnDe(device=args.mt_device)
-    qe = COMETQE(accelerator_preference=args.comet_accelerator)            # wmt22-cometkiwi-da (reference-free)
+    qe = COMETQE(accelerator_preference=args.comet_accelerator)
     vf = LMVerifier(device=args.lm_verifier_device)
 
     # Precompute de_old once (1 - QE(s0, t0))
@@ -291,7 +294,7 @@ def main():
     with torch.no_grad():
         test_output = policy.generate(test_ids.unsqueeze(0), max_new_tokens=50, do_sample=False)
         test_response = tok.decode(test_output[0][len(test_ids):], skip_special_tokens=True)
-    print(f"Test prompt: {test_prompt[:100]}...")
+    print(f"Test prompt: {test_prompt}")
     print(f"Test output: {test_response}")
     print("="*80 + "\n")
     policy.train()  # Set back to train mode
@@ -304,7 +307,7 @@ def main():
         start = (step * args.batch_size) % n
         idx = [(start + i) % n for i in range(args.batch_size)]
         prompts = [prompts_all[i] for i in idx]
-        print("Prompts: ", prompts)
+        #print("Prompts: ", prompts)
         # 1) tokenize prompts
         query_tensors = [tok(p, return_tensors="pt").input_ids.squeeze(0) for p in prompts] # looks sketchy?
         query_tensors = [q.to(trainer.accelerator.device) for q in query_tensors] # move to device
@@ -462,13 +465,13 @@ def main():
         })
 
         # Save model as artifact
-        artifact = wandb.Artifact(
+        '''artifact = wandb.Artifact(
             name=f"ppo-model-{wandb.run.id}",
             type="model",
             description=f"PPO fine-tuned {args.base_model} for MT-breaking"
         )
         artifact.add_dir(args.save_dir)
-        wandb.log_artifact(artifact)
+        wandb.log_artifact(artifact)'''
 
         wandb.finish()
 
