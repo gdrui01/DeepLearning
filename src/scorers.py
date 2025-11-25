@@ -2,7 +2,24 @@ import math
 from typing import List, Dict
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from comet import download_model, load_from_checkpoint
+from sentinel_metric import download_model as sentinel_download_model, load_from_checkpoint as sentinel_load_from_checkpoint
+
+from comet import download_model as comet_download_model, load_from_checkpoint as comet_load_from_checkpoint
+
+
+
+# cloned locally instead of pip install because of issues with sentinel_metric
+# https://huggingface.co/Prosho/sentinel-src-25
+class Sentinel:
+    def __init__(self):
+        ckpt = sentinel_download_model("Prosho/sentinel-src-25")
+        self.model = sentinel_load_from_checkpoint(ckpt)
+
+    def difficulty(self, sentences: List[str]) -> List[float]:
+        data = [{"src": s} for s in sentences]
+        out = self.model.predict(data, batch_size = 8, gpus = 1)
+        return out.scores
+
 
 # -------- COMET QE (reference-free) --------
 
@@ -13,8 +30,8 @@ class COMETQE:
     Wrap COMET QE to compute difficulty = 1 - QE(src, mt).
     """
     def __init__(self, model_name: str = QE_MODEL, accelerator_preference: str = "gpu"):
-        ckpt = download_model(model_name)   # handles local cache
-        self.model = load_from_checkpoint(ckpt)
+        ckpt = comet_download_model(model_name)   # handles local cache
+        self.model = comet_load_from_checkpoint(ckpt)
         self.accelerator_preference = accelerator_preference
         try:
             if hasattr(self.model, "trainer"):
