@@ -2,6 +2,7 @@ import math
 import re
 from typing import List, Dict
 import torch
+import numpy as np
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from comet import download_model, load_from_checkpoint
 from langdetect import detect, LangDetectException
@@ -174,36 +175,46 @@ class LMVerifier:
         scores = []
 
         for sentence in sentences:
+            pen = False
+            sent_score = 0.0
             # Check if empty or invalid
             if not sentence or not sentence.strip():
-                scores.append(0.0)
-                continue
+                sent_score -= 0.1
+                pen = True
+                # scores.append(0.0)
+                # continue
 
             # Validate it's English
             if not self._is_english(sentence):
-                print(f"Not English: {sentence[:50]}...")
-                scores.append(0.0)
-                continue
+                sent_score -= 0.1
+                pen = True
+                # print(f"Not English: {sentence[:50]}...")
+                # scores.append(0.0)
+                # continue
 
             # Validate it's a single sentence
             sentence_count = self._count_sentences(sentence)
             if sentence_count != 1:
-                print(f"Expected 1 sentence, got {sentence_count}: {sentence[:50]}...")
-                scores.append(0.0)
-                continue
+                sent_score -= (np.abs(sentence_count - 1)) * 0.1
+                pen = True
+                # print(f"Expected 1 sentence, got {sentence_count}: {sentence[:50]}...")
+                # scores.append(0.0)
+                # continue
 
             # If all validations pass, compute perplexity score
             enc = self.tok([sentence], return_tensors="pt", padding=True).to(self.device)
 
             if enc["input_ids"].numel() == 0:
-                scores.append(0.0)
+                scores.append(-10.0)
                 continue
 
-            out = self.model(**enc, labels=enc["input_ids"])
-            loss = float(out.loss)
-            print(f"Loss: {loss}")
-            ppl = min(1.0, math.exp(-((loss-5.0)/scale)))
-            scores.append(ppl)
+            if pen is False:
+                out = self.model(**enc, labels=enc["input_ids"])
+                loss = float(out.loss)
+                print(f"Loss: {loss}")
+                ppl = min(1.0, math.exp(-((loss-5.0)/scale)))
+                sent_score += ppl
+            scores.append(sent_score)
 
         return scores
 
