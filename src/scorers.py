@@ -1,8 +1,10 @@
 import math
+import re
 from typing import List, Dict
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from comet import download_model, load_from_checkpoint
+from langdetect import detect, LangDetectException
 
 # -------- COMET QE (reference-free) --------
 
@@ -122,6 +124,10 @@ class LMVerifier:
     """
     Return higher-is-better 'naturalness' via negative perplexity.
     We use a small LM to keep it light.
+
+    Additionally validates:
+    - Output is in English
+    - Output is exactly one sentence
     """
     def __init__(self, name: str = VERIFIER_LM, device: str | None = None):
         self.tok = AutoTokenizer.from_pretrained(name)
@@ -134,34 +140,103 @@ class LMVerifier:
         self.model.to(device)
         self.device = device
 
+    def _is_english(self, text: str) -> bool:
+        """Check if text is in English using language detection."""
+        if not text or not text.strip():
+            return False
+        try:
+            lang = detect(text)
+            return lang == "en"
+        except LangDetectException:
+            # If detection fails, assume it's not valid English
+            return False
+
+    def _count_sentences(self, text: str) -> int:
+        """Count sentences using regex pattern matching."""
+        if not text or not text.strip():
+            return 0
+        # Split on common sentence terminators (., !, ?)
+        # Use regex to match sentence endings followed by space or end of string
+        sentences = re.split(r'[.!?]+\s+|\s*[.!?]+$', text.strip())
+        # Filter out empty strings
+        sentences = [s for s in sentences if s.strip()]
+        return len(sentences)
+
     @torch.inference_mode()
     def score(self, sentences: List[str], scale: float = 1.0) -> List[float]:
-        # Handle empty or invalid sentences
-        valid_sentences = [s if s and s.strip() else "." for s in sentences]
+        """
+        Score sentences based on perplexity, language, and sentence count.
+        Returns 0.0 if:
+        - Text is not in English
+        - Text contains more than one sentence
+        Otherwise returns perplexity-based score.
+        """
+        scores = []
 
-        enc = self.tok(valid_sentences, return_tensors="pt", padding=True).to(self.device)
+        for sentence in sentences:
+            # Check if empty or invalid
+            if not sentence or not sentence.strip():
+                scores.append(0.0)
+                continue
 
-        # Handle edge case of empty tokenization
-        if enc["input_ids"].numel() == 0:
-            return [0.0] * len(sentences)
+            # Validate it's English
+            if not self._is_english(sentence):
+                print(f"Not English: {sentence[:50]}...")
+                scores.append(0.0)
+                continue
 
-        out = self.model(**enc, labels=enc["input_ids"])
-        # one scalar loss for the batch; broadcast for simplicity
-        loss = float(out.loss)
-        print(f"Loss: {loss}")
-        ppl = min(1.0, math.exp(-((loss-5.0)/scale)))
-        return [ppl] * len(sentences)  # higher is better
+            # Validate it's a single sentence
+            sentence_count = self._count_sentences(sentence)
+            if sentence_count != 1:
+                print(f"Expected 1 sentence, got {sentence_count}: {sentence[:50]}...")
+                scores.append(0.0)
+                continue
+
+            # If all validations pass, compute perplexity score
+            enc = self.tok([sentence], return_tensors="pt", padding=True).to(self.device)
+
+            if enc["input_ids"].numel() == 0:
+                scores.append(0.0)
+                continue
+
+            out = self.model(**enc, labels=enc["input_ids"])
+            loss = float(out.loss)
+            print(f"Loss: {loss}")
+            ppl = min(1.0, math.exp(-((loss-5.0)/scale)))
+            scores.append(ppl)
+
+        return scores
 
 def test_verifier():
     verifier = LMVerifier()
+
+    print("\n=== Testing good English single sentence ===")
     good_score = verifier.score(["Because the storm had intensified rapidly, the coastal town evacuated all residents."])
-    print(f"Good score: {good_score}") # 1.0
+    print(f"Good score: {good_score}") # Should pass all checks
+
+    print("\n=== Testing bad English (nonsensical but English words) ===")
     bad_score = verifier.score(["Tables green upside flipping extreme sword fight."])
-    print(f"Bad score: {bad_score}") # 0.004
+    print(f"Bad score: {bad_score}") # Should get low perplexity score
+
+    print("\n=== Testing gibberish ===")
     very_bad_score = verifier.score(["Jhgjasd dsafjklhref, fkssgh sjh sfkhas fjhfe."])
-    print(f"Very bad score: {very_bad_score}") # 0.35 (!!) (Although gibberish, the score
-    # is still higher than the bad score, because the model splits the sentence into
-    # much smaller tokens that are still "somewhat" meaningful.)
+    print(f"Very bad score: {very_bad_score}") # Should fail language check
+
+    print("\n=== Testing multiple sentences ===")
+    multi_sentence = verifier.score(["The cat sat on the mat. The dog ran in the yard."])
+    print(f"Multiple sentences score: {multi_sentence}") # Should be 0.0 - too many sentences
+
+    print("\n=== Testing non-English (German) ===")
+    german_score = verifier.score(["Die Katze saß auf der Matte."])
+    print(f"German score: {german_score}") # Should be 0.0 - not English
+
+    print("\n=== Testing empty string ===")
+    empty_score = verifier.score([""])
+    print(f"Empty score: {empty_score}") # Should be 0.0
+
+    print("\n=== Testing three sentences ===")
+    three_sentences = verifier.score(["First sentence here. Second one too. And a third."])
+    print(f"Three sentences score: {three_sentences}") # Should be 0.0
 
 if __name__ == "__main__":
     # test_comet_qe()
