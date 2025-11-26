@@ -122,6 +122,7 @@ def main():
     ap.add_argument("--k", type=int, default=500, help="num seeds to use")
     ap.add_argument("--base_model", type=str, default=DEFAULT_BASE)
     ap.add_argument("--save_dir", type=str, default="checkpoints/gpt2-ppo-method2")
+    ap.add_argument("--resume_from_checkpoint", type=str, default=None, help="Path to checkpoint directory to resume training from")
     ap.add_argument("--steps", type=int, default=200)           # PPO update steps
     ap.add_argument("--batch_size", type=int, default=2)        # prompts per PPO step (reduced for memory efficiency with Qwen3 + PPO's 2x model requirement)
     ap.add_argument("--gen_max_new_tokens", type=int, default=64, help="Max tokens to generate. Reduced for memory efficiency with PPO's 2x model requirement. 64-128 is reasonable for sentence rewriting.")
@@ -205,7 +206,7 @@ def main():
     # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
-    
+
     # Clear cache before loading models
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
@@ -214,8 +215,12 @@ def main():
     # Load model in FP32 - mixed precision training will handle memory efficiency
     # Loading in FP16 directly conflicts with GradScaler which expects FP32 gradients
     # Mixed precision will automatically convert to FP16 during forward pass while keeping gradients in FP32
+    # If resuming from checkpoint, load the fine-tuned model; otherwise load base model
+    model_path = args.resume_from_checkpoint if args.resume_from_checkpoint else args.base_model
+    if args.resume_from_checkpoint:
+        print(f"Resuming from checkpoint: {args.resume_from_checkpoint}")
     policy = AutoModelForCausalLMWithValueHead.from_pretrained(
-        args.base_model,
+        model_path,
         # Don't specify torch_dtype - let it load in default precision (FP32)
         # Mixed precision training will handle the conversion for memory efficiency
     )
@@ -297,6 +302,20 @@ def main():
         no_repeat_ngram_size=3,  # Prevent repeating 3-grams (helps avoid instruction repetition)
     )
 
+    # ---- Load checkpoint state if resuming ----
+    start_step = 0
+    if args.resume_from_checkpoint:
+        checkpoint_state_path = os.path.join(args.resume_from_checkpoint, "training_state.pt")
+        if os.path.exists(checkpoint_state_path):
+            print(f"Loading training state from: {checkpoint_state_path}")
+            checkpoint_state = torch.load(checkpoint_state_path, map_location=device)
+            optimizer.load_state_dict(checkpoint_state["optimizer_state_dict"])
+            lr_scheduler.load_state_dict(checkpoint_state["scheduler_state_dict"])
+            start_step = checkpoint_state["step"] + 1  # Resume from next step
+            print(f"Resuming from step {start_step}")
+        else:
+            print(f"Warning: No training_state.pt found in {args.resume_from_checkpoint}, starting from step 0")
+
     # ---- Test generation BEFORE training ----
     print("\n" + "="*80)
     print("TESTING MODEL GENERATION BEFORE TRAINING")
@@ -315,7 +334,9 @@ def main():
     # ---- PPO loop ----
     n = len(prompts_all)
     print(f"Starting PPO: seeds={n}, steps={args.steps}, batch={args.batch_size}")
-    for step in trange(args.steps, desc="PPO"):
+    if start_step > 0:
+        print(f"Resuming training from step {start_step}")
+    for step in trange(start_step, args.steps, desc="PPO", initial=start_step, total=args.steps):
         # sample a mini-batch of prompts (cyclic with wrapping)
         start = (step * args.batch_size) % n
         idx = [(start + i) % n for i in range(args.batch_size)]
@@ -444,10 +465,24 @@ def main():
 
         if (step + 1) % 20 == 0:
             trainer.save_pretrained(args.save_dir)
+            # Save training state (optimizer, scheduler, step)
+            training_state = {
+                "step": step,
+                "optimizer_state_dict": optimizer.state_dict(),
+                "scheduler_state_dict": lr_scheduler.state_dict(),
+            }
+            torch.save(training_state, os.path.join(args.save_dir, "training_state.pt"))
             torch.cuda.empty_cache()
 
     # final save
     trainer.save_pretrained(args.save_dir)
+    # Save final training state
+    final_training_state = {
+        "step": args.steps - 1,  # Last step completed
+        "optimizer_state_dict": optimizer.state_dict(),
+        "scheduler_state_dict": lr_scheduler.state_dict(),
+    }
+    torch.save(final_training_state, os.path.join(args.save_dir, "training_state.pt"))
     print(f"Saved PPO policy to: {args.save_dir}")
 
     # tiny sample after training
