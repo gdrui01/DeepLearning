@@ -8,7 +8,7 @@ from torch.optim import SGD
 from tqdm import trange
 import wandb
 
-from transformers import AutoTokenizer, get_linear_schedule_with_warmup
+from transformers import AutoTokenizer, get_linear_schedule_with_warmup, get_constant_schedule_with_warmup
 from trl import PPOConfig, PPOTrainer, AutoModelForCausalLMWithValueHead
 
 from .translate import MTEnDe
@@ -16,12 +16,29 @@ from .scorers import COMETQE, LMVerifier
 from .constraints import constraint_score
 from .losses import method2_loss
 
+PPO_EPOCHS = 2
+LR = 1e-4 # 5e-5
 
 DEFAULT_BASE = "Qwen/Qwen3-0.6B-Base"
-DEFAULT_INSTRUCTION = (
-    """Rewrite this sentence to be extremely difficult for machine translation using idioms, ambiguity, and wordplay, while keeping it grammatically correct English: "{seed}"
 
-    Only return the single edited sentence."""
+# DEFAULT_INSTRUCTION = (
+#     """Rewrite this sentence to be extremely difficult for machine translation using idioms, ambiguity, and wordplay, while keeping it grammatically correct English: "{seed}"
+
+#     Only return the single edited sentence."""
+# )
+# DEFAULT_INSTRUCTION = (
+#     """
+#     Rewrite this sentence to be extremely difficult for machine translation using idioms, ambiguity, and wordplay while keeping it grammatically correct English, returning only the single edited sentence: "{seed}"
+#     Do not output anything else, except for the edited sentence.
+#     Do not give an explanation.
+#     """
+# )
+DEFAULT_INSTRUCTION = (
+    """
+    Rewrite the following sentence to be extremely difficult for machine translation using idioms, ambiguity, and wordplay while keeping it grammatically correct English, returning only the single edited sentence:
+    
+    "{seed}"
+    """
 )
 # # Could be a better prompt
 # DEFAULT_INSTRUCTION = (
@@ -73,9 +90,8 @@ class Method2Rewarder:
         ver = self.vf.score(edits)
         # Select the corresponding de_old values for this batch
         de_old_batch = [self.de_old[i] for i in indices]
-        L = method2_loss(de_new, de_old_batch, cons, ver, x=self.x, y=self.y, z=self.z, f=self.f)
+        L, delta = method2_loss(de_new, de_old_batch, cons, ver, x=self.x, y=self.y, z=self.z, f=self.f)
         # PPO wants rewards (higher is better)
-        delta = de_new - np.array(de_old_batch)
         return [-float(l) for l in L], cons, ver, delta.tolist()
 
 
@@ -140,7 +156,7 @@ def main():
                 "base_model": args.base_model,
                 "steps": args.steps,
                 "batch_size": args.batch_size,
-                "learning_rate": 1e-4,
+                "learning_rate": LR,
                 "gen_max_new_tokens": args.gen_max_new_tokens,
                 "top_p": args.top_p,
                 "temperature": args.temperature,
@@ -223,18 +239,17 @@ def main():
     # For Qwen3-0.6B: ~1.2B parameters total (2x 0.6B), with FP32 weights this is ~4.8GB
     # Plus activations, gradients, optimizer states, and generation buffers = easily 10-11GB on 1080Ti
 
-    PPO_EPOCHS = 2
-    optimizer = SGD(policy.parameters(), lr=5e-5)
+    optimizer = SGD(policy.parameters(), lr=LR)
     num_training_steps = args.steps * PPO_EPOCHS
-    lr_scheduler = get_linear_schedule_with_warmup(
+    lr_scheduler = get_constant_schedule_with_warmup( # get_linear_schedule_with_warmup
         optimizer,
         num_warmup_steps=0,
-        num_training_steps=num_training_steps,
+        #num_training_steps=num_training_steps,
     )
 
     ppo_config = PPOConfig(
         model_name=args.base_model,
-        # learning_rate=1e-4,            # Lower LR for more stable training
+        # learning_rate=LR,            # Lower LR for more stable training
         batch_size=args.batch_size,    # samples used per PPO step
         mini_batch_size=1,             # Process one sample at a time to minimize memory usage
         gradient_accumulation_steps=1,
@@ -304,9 +319,8 @@ def main():
         start = (step * args.batch_size) % n
         idx = [(start + i) % n for i in range(args.batch_size)]
         prompts = [prompts_all[i] for i in idx]
-        print("Prompts: ", prompts)
         # 1) tokenize prompts
-        query_tensors = [tok(p, return_tensors="pt").input_ids.squeeze(0) for p in prompts] # looks sketchy?
+        query_tensors = [tok(p, return_tensors="pt").input_ids.squeeze(0) for p in prompts]
         query_tensors = [q.to(trainer.accelerator.device) for q in query_tensors] # move to device
 
         # 2) generate responses
@@ -324,7 +338,7 @@ def main():
                 # For causal models, extract only the generated tokens (excluding the input prompt)
                 input_len = query.shape[0]
                 response = gen_output.squeeze()[input_len:]
-                print(f"Decoded prompt: {tok.decode(query, skip_special_tokens=True).strip()}")
+                # print(f"Decoded prompt: {tok.decode(query, skip_special_tokens=True).strip()}")
                 """---------------------------------------------------------------------------------
                 CHECK THIS FALLBACK!!!
                 ---------------------------------------------------------------------------------"""
