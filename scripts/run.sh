@@ -16,8 +16,8 @@ mkdir -p logs
 python -m src.RL_ppo_training \
   --seeds data/seeds.txt \
   --k 500 \
-  --x 0.7 \
-  --y 0.3 \
+  --x 3.0 \
+  --y 1.0 \
   --z 0.3 \
   --steps 500 \
   --batch_size 2 \
