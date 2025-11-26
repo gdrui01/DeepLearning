@@ -25,6 +25,9 @@ def method2_loss(
     elif f == "sigmoid":
         delta = 1/(1 + np.exp(-delta))
 
+    delta = np.where(ver == 0, 0.0, delta)
+    print(f"verifier: {ver}")
+    print(f"delta: {delta}")
     wsum = x + y + z
     L = 1.0 - (x*delta + y*cons + z*ver) / wsum
-    return L.tolist()
+    return L.tolist(), delta
