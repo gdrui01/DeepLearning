@@ -186,7 +186,7 @@ class LMVerifier:
 
             # Validate it's English
             if not self._is_english(sentence):
-                sent_score -= 0.1
+                sent_score -= 1.0
                 pen = True
                 # print(f"Not English: {sentence[:50]}...")
                 # scores.append(0.0)

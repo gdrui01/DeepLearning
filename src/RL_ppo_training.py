@@ -35,7 +35,7 @@ DEFAULT_BASE = "Qwen/Qwen3-0.6B-Base"
 # )
 DEFAULT_INSTRUCTION = (
     """
-    Rewrite the following sentence to be extremely difficult for machine translation using idioms, ambiguity, and wordplay while keeping it grammatically correct English, returning only the single edited sentence:
+    Rewrite the following sentence to be extremely difficult for machine translation using idioms, ambiguity, and wordplay while keeping it grammatically correct English, returning only a single edited sentence:
     
     "{seed}"
     """
@@ -132,8 +132,8 @@ def main():
     ap.add_argument("--lm_verifier_device", type=str, default="cuda", choices=["cpu", "cuda"], help="Device for LM verifier scorer")
     ap.add_argument("--comet_accelerator", type=str, default="gpu", choices=["cpu", "gpu"], help="Accelerator used by COMET QE scorer")
     # loss weights
-    ap.add_argument("--x", type=float, default=1.0)
-    ap.add_argument("--y", type=float, default=0.3)
+    ap.add_argument("--x", type=float, default=5.0)
+    ap.add_argument("--y", type=float, default=1.0)
     ap.add_argument("--z", type=float, default=0.3)
     ap.add_argument("--f", type=str, default="none", choices=["relu","sigmoid","none"])
     ap.add_argument("--seed", type=int, default=42)
