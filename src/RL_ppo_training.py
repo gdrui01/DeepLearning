@@ -161,7 +161,7 @@ def main():
     ap.add_argument("--resume_from_checkpoint", type=str, default=None, help="Path to checkpoint directory to resume training from")
     ap.add_argument("--steps", type=int, default=200)           # PPO update steps
     ap.add_argument("--batch_size", type=int, default=2)        # prompts per PPO step (reduced for memory efficiency with Qwen3 + PPO's 2x model requirement)
-    ap.add_argument("--gen_max_new_tokens", type=int, default=64, help="Max tokens to generate. Reduced for memory efficiency with PPO's 2x model requirement. 64-128 is reasonable for sentence rewriting.")
+    ap.add_argument("--gen_max_new_tokens", type=int, default=45, help="Max tokens to generate (~30 words at 1.5 tokens/word). Aligned with constraint_score max_len=30 words.")
     ap.add_argument("--top_p", type=float, default=0.8, help="Qwen3 recommended: 0.95 for thinking mode, 0.8 for non-thinking")
     ap.add_argument("--temperature", type=float, default=0.7, help="Qwen3 recommended: 0.6 for thinking mode, 0.7 for non-thinking")
     ap.add_argument("--mt_device", type=str, default="cuda", choices=["cpu", "cuda"], help="Device for MT translator (defaults to CPU to save VRAM)")

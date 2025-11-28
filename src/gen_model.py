@@ -21,12 +21,13 @@ class EditGenerator:
 
     @torch.inference_mode()
     def edit(self, seeds: List[str], instruction: str,
-             max_new_tokens: int = 40,
+             max_new_tokens: int = 45,
              temperature: float = 0.9,
              top_p: float = 0.95,
              num_return_sequences: int = 1) -> List[str]:
         """
         Given seeds and an instruction, produce edited sentences.
+        Max 45 tokens corresponds to ~30 words (1.5 tokens/word ratio).
         """
         prompts = [f"{instruction}\n\n'{s}'\n\nRewrite it as one grammatical English sentence. Output only the edited sentence, no other text." for s in seeds]
         enc = self.tok(prompts, return_tensors="pt", padding=True, truncation=True).to(self.device)

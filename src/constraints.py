@@ -3,21 +3,29 @@ from typing import List
 
 def constraint_score(sentences: List[str],
                      min_len: int = 4,
-                     max_len: int = 1024,
+                     max_len: int = 30,
                      penalize_markdown: bool = True) -> List[float]:
     """
     Simple constraint signal: length window + lexical diversity.
     Optionally penalizes markdown formatting.
     Returns higher-is-better scores.
+
+    Max length is set to 30 words (not tokens - this is simpler and more interpretable).
+    Length is measured by counting alphabetic words only.
     """
     scores = []
     for s in sentences:
-        toks = re.findall(r"\w+|\S", s)
-        alpha = [t for t in toks if re.match(r"^[A-Za-z]+$", t)]
-        n = len(toks)
-        length_ok = (min_len <= n <= max_len)
-        uniq_ratio = len(set(w.lower() for w in alpha)) / max(1, len(alpha))
-        # base on diversity around 0.5, add length bonus
+        # Extract only alphabetic words (ignoring punctuation/numbers)
+        words = re.findall(r'\b[A-Za-z]+\b', s)
+        n_words = len(words)
+
+        # Check length constraint (word count)
+        length_ok = (min_len <= n_words <= max_len)
+
+        # Lexical diversity based on unique words
+        uniq_ratio = len(set(w.lower() for w in words)) / max(1, len(words))
+
+        # Base score: diversity around 0.5, add length bonus/penalty
         score = (uniq_ratio - 0.5) + (0.5 if length_ok else -0.5)
 
         # Penalize markdown formatting (e.g., **bold** or *italic*)
@@ -31,5 +39,11 @@ def constraint_score(sentences: List[str],
 
 if __name__ == "__main__":
     good_score = constraint_score(["The cross-eyed cat sat on the mat, patiently waiting for her owner to return."])
-    bad_score = constraint_score(["I am going out."])
-    print(f"Good score: {good_score}, Bad score: {bad_score}")
+    bad_too_long = constraint_score(["This is a very very very very very very very very very very very very very very very very very very very very very very very very very very very very very very very very very very long sentence that exceeds the maximum word limit."])
+    bad_too_short = constraint_score(["Hi."])
+    bad_low_diversity = constraint_score(["The the the the the the the the the the cat sat there."])
+
+    print(f"Good score (16 words, high diversity): {good_score}")
+    print(f"Bad - too long (>30 words): {bad_too_long}")
+    print(f"Bad - too short (<4 words): {bad_too_short}")
+    print(f"Bad - low diversity (repeated words): {bad_low_diversity}")
