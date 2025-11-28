@@ -1,6 +1,6 @@
 import os, argparse, random
-from dataclasses import dataclass
-from typing import List
+from dataclasses import dataclass, field
+from typing import List, Optional
 
 import numpy as np
 import torch
@@ -14,7 +14,7 @@ from trl import PPOConfig, PPOTrainer, AutoModelForCausalLMWithValueHead
 from .translate import MTEnDe
 from .scorers import COMETQE, LMVerifier
 from .constraints import constraint_score
-from .losses import method2_loss
+from .losses import method2_loss, RewardNormalizer
 
 PPO_EPOCHS = 2
 LR = 1e-4 # 5e-5
@@ -35,8 +35,8 @@ DEFAULT_BASE = "Qwen/Qwen3-0.6B-Base"
 # )
 DEFAULT_INSTRUCTION = (
     """
-    Rewrite the following sentence to be extremely difficult for machine translation using idioms, ambiguity, and wordplay while keeping it grammatically correct English, returning only a single edited sentence:
-    
+    Rewrite the following sentence to be extremely difficult for machine translation using idioms, ambiguity, and wordplay while keeping it grammatically correct English. Return only plain text without any formatting, markdown, or special characters. Output only a single edited sentence:
+
     "{seed}"
     """
 )
@@ -77,6 +77,21 @@ class Method2Rewarder:
     y: float = 0.3
     z: float = 0.3
     f: str = "relu"
+    normalize_rewards: bool = False
+    clip_normalized: float = 3.0
+    delta_normalizer: Optional[RewardNormalizer] = None
+    verifier_normalizer: Optional[RewardNormalizer] = None
+    constraint_normalizer: Optional[RewardNormalizer] = None
+
+    def __post_init__(self):
+        """Initialize normalizers if normalization is enabled."""
+        if self.normalize_rewards:
+            if self.delta_normalizer is None:
+                self.delta_normalizer = RewardNormalizer()
+            if self.verifier_normalizer is None:
+                self.verifier_normalizer = RewardNormalizer()
+            if self.constraint_normalizer is None:
+                self.constraint_normalizer = RewardNormalizer()
 
     @torch.inference_mode()
     def reward(self, edits: List[str], indices: List[int]) -> List[float]:
@@ -90,10 +105,31 @@ class Method2Rewarder:
         ver = self.vf.score(edits)
         # Select the corresponding de_old values for this batch
         de_old_batch = [self.de_old[i] for i in indices]
-        L, delta = method2_loss(de_new, de_old_batch, cons, ver, x=self.x, y=self.y, z=self.z, f=self.f)
+
+        # Prepare normalizers tuple if normalization is enabled
+        normalizers = None
+        if self.normalize_rewards:
+            normalizers = (self.delta_normalizer, self.verifier_normalizer, self.constraint_normalizer)
+
+        L, delta = method2_loss(
+            de_new, de_old_batch, cons, ver,
+            x=self.x, y=self.y, z=self.z, f=self.f,
+            normalizers=normalizers,
+            normalize_rewards=self.normalize_rewards,
+            clip_normalized=self.clip_normalized if self.normalize_rewards else None
+        )
         # PPO wants rewards (higher is better)
-        #return [-float(l) for l in L], cons, ver, delta.tolist()
         return [float(l) for l in L], cons, ver, delta.tolist()
+
+
+def clean_markdown(text: str) -> str:
+    """Remove markdown formatting like **bold** and *italic*."""
+    import re
+    # Remove bold (**text**)
+    text = re.sub(r'\*\*([^\*]+)\*\*', r'\1', text)
+    # Remove italic (*text*)
+    text = re.sub(r'\*([^\*]+)\*', r'\1', text)
+    return text
 
 
 def build_prompts(seeds: List[str], tokenizer) -> List[str]:
@@ -136,6 +172,9 @@ def main():
     ap.add_argument("--y", type=float, default=1.0)
     ap.add_argument("--z", type=float, default=0.3)
     ap.add_argument("--f", type=str, default="none", choices=["relu","sigmoid","none"])
+    # reward normalization
+    ap.add_argument("--normalize_rewards", action="store_true", help="Enable reward normalization (z-score)")
+    ap.add_argument("--clip_normalized", type=float, default=3.0, help="Clip normalized rewards to [-N, +N] std devs")
     ap.add_argument("--seed", type=int, default=42)
     # wandb
     ap.add_argument("--wandb_project", type=str, default="mt-breaker-ppo")
@@ -166,6 +205,8 @@ def main():
                 "loss_y": args.y,
                 "loss_z": args.z,
                 "loss_f": args.f,
+                "normalize_rewards": args.normalize_rewards,
+                "clip_normalized": args.clip_normalized,
                 "seed": args.seed,
                 "num_seeds": args.k,
                 "ppo_epochs": 4,
@@ -181,6 +222,9 @@ def main():
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
     tok.padding_side = "left"  # Required for batch generation with causal LMs
+
+    # Get asterisk token IDs to suppress markdown formatting
+    asterisk_token_ids = tok.encode('*', add_special_tokens=False)
 
     # ---- data ----
     seeds = read_seeds(args.seeds, args.k)
@@ -199,7 +243,9 @@ def main():
 
     rewarder = Method2Rewarder(
         seeds=seeds, de_old=de_old, mt=mt, qe=qe, vf=vf,
-        x=args.x, y=args.y, z=args.z, f=args.f
+        x=args.x, y=args.y, z=args.z, f=args.f,
+        normalize_rewards=args.normalize_rewards,
+        clip_normalized=args.clip_normalized
     )
 
     # ---- policy + ref model ----
@@ -300,6 +346,7 @@ def main():
         top_k=50,  # Increased from 20 to allow more vocabulary diversity
         repetition_penalty=1.1,  # Penalize repetitions to avoid repeating prompt
         no_repeat_ngram_size=3,  # Prevent repeating 3-grams (helps avoid instruction repetition)
+        bad_words_ids=[asterisk_token_ids],  # Prevent generating asterisks (markdown formatting)
     )
 
     # ---- Load checkpoint state if resuming ----
@@ -391,7 +438,7 @@ def main():
         trainer.model.train()
 
         # 3) decode responses for reward computation
-        cleaned = [tok.decode(r, skip_special_tokens=True).strip() for r in response_tensors]
+        cleaned = [clean_markdown(tok.decode(r, skip_special_tokens=True).strip()) for r in response_tensors]
 
         # Final safeguard: replace any empty strings with a minimal fallback
         cleaned = [s if s else "." for s in cleaned]
@@ -433,6 +480,17 @@ def main():
             "generation/mean_response_length": mean_response_len,
             "generation/sample_text": wandb.Html(f"<pre>{cleaned[0]}</pre>"),
         }
+
+        # Add normalization statistics if enabled
+        if args.normalize_rewards:
+            log_dict.update({
+                "norm_stats/delta_mean": rewarder.delta_normalizer.mean,
+                "norm_stats/delta_std": rewarder.delta_normalizer.std,
+                "norm_stats/verifier_mean": rewarder.verifier_normalizer.mean,
+                "norm_stats/verifier_std": rewarder.verifier_normalizer.std,
+                "norm_stats/constraint_mean": rewarder.constraint_normalizer.mean,
+                "norm_stats/constraint_std": rewarder.constraint_normalizer.std,
+            })
 
         # Add all PPO stats from trainer - they come with their own prefixes
         # Filter out NaN values and convert tensors/arrays to scalars

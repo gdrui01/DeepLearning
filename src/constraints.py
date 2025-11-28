@@ -3,9 +3,11 @@ from typing import List
 
 def constraint_score(sentences: List[str],
                      min_len: int = 4,
-                     max_len: int = 1024) -> List[float]:
+                     max_len: int = 1024,
+                     penalize_markdown: bool = True) -> List[float]:
     """
     Simple constraint signal: length window + lexical diversity.
+    Optionally penalizes markdown formatting.
     Returns higher-is-better scores.
     """
     scores = []
@@ -17,6 +19,12 @@ def constraint_score(sentences: List[str],
         uniq_ratio = len(set(w.lower() for w in alpha)) / max(1, len(alpha))
         # base on diversity around 0.5, add length bonus
         score = (uniq_ratio - 0.5) + (0.5 if length_ok else -0.5)
+
+        # Penalize markdown formatting (e.g., **bold** or *italic*)
+        if penalize_markdown:
+            markdown_count = len(re.findall(r'\*\*[^\*]+\*\*|\*[^\*]+\*', s))
+            score -= markdown_count * 0.2  # Penalty per markdown instance
+
         score = min(1.0, max(0.0, score)) # making sure the score is between 0 and 1
         scores.append(score)
     return scores
