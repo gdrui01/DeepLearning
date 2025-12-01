@@ -569,14 +569,15 @@ def main():
             "final/sample_output": wandb.Html(f"<pre>{final_sample}</pre>"),
         })
 
-        # Save model as artifact
-        artifact = wandb.Artifact(
-            name=f"ppo-model-{wandb.run.id}",
-            type="model",
-            description=f"PPO fine-tuned {args.base_model} for MT-breaking"
-        )
-        artifact.add_dir(args.save_dir)
-        wandb.log_artifact(artifact)
+        # NOTE: Artifact logging disabled to prevent storage clutter
+        # To enable, uncomment the following lines:
+        # artifact = wandb.Artifact(
+        #     name=f"ppo-model-{wandb.run.id}",
+        #     type="model",
+        #     description=f"PPO fine-tuned {args.base_model} for MT-breaking"
+        # )
+        # artifact.add_dir(args.save_dir)
+        # wandb.log_artifact(artifact)
 
         wandb.finish()
 
