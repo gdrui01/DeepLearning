@@ -2,17 +2,46 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 import torch
 import gc
+import argparse
+from pathlib import Path
 
 torch.cuda.empty_cache()
 gc.collect()
 
-model_name = "Qwen/Qwen3-0.6B-Base" # "gpt2"
+# Parse command line arguments
+parser = argparse.ArgumentParser(description="Test model inference with optional checkpoint loading")
+parser.add_argument(
+    "--checkpoint",
+    type=str,
+    default=None,
+    help="Path to model checkpoint directory (e.g., checkpoints/checkpoint-1000)"
+)
+parser.add_argument(
+    "--base-model",
+    type=str,
+    default="Qwen/Qwen3-0.6B-Base",
+    help="Base model name or path"
+)
+args = parser.parse_args()
+
+model_name = args.base_model
+
+# Determine which model to load
+if args.checkpoint:
+    checkpoint_path = Path(args.checkpoint)
+    if not checkpoint_path.exists():
+        raise ValueError(f"Checkpoint path does not exist: {checkpoint_path}")
+    print(f"Loading model from checkpoint: {checkpoint_path}")
+    model_path = str(checkpoint_path)
+else:
+    print(f"Loading base model: {model_name}")
+    model_path = model_name
 
 # load the tokenizer and the model
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 # tokenizer.pad_token = tokenizer.eos_token # necessary for gpt2
 model = AutoModelForCausalLM.from_pretrained(
-    model_name,
+    model_path,
     dtype="auto",
     device_map="auto"
 )
