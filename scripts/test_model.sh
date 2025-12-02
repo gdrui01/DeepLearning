@@ -10,7 +10,7 @@
 module add cuda/12.6
 
 source "$HOME/venvs/mtbreaker/bin/activate"
-cd "$HOME/DeepLearning/"
+cd "/work/scratch/mbehanzin/DeepLearning/"
 mkdir -p logs
 
 # python -m src.scorers
