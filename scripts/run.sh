@@ -18,8 +18,8 @@ python -m src.RL_ppo_training \
   --k 800 \
   --x 6.0 \
   --y 1.0 \
-  --z 1.0 \
-  --steps 200 \
+  --z 2.0 \
+  --steps 100 \
   --batch_size 4 \
   --temperature 0.6 \
   --save_dir "checkpoints/stage-1"
