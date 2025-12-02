@@ -11,8 +11,8 @@ import wandb
 from transformers import AutoTokenizer, get_linear_schedule_with_warmup, get_constant_schedule_with_warmup
 from trl import PPOConfig, PPOTrainer, AutoModelForCausalLMWithValueHead
 
-from .translate import MTEnDe
-from .scorers import COMETQE, LMVerifier
+#from .translate import MTEnDe
+from .scorers import COMETQE, LMVerifier, Sentinel
 from .constraints import constraint_score
 from .losses import method2_loss, RewardNormalizer
 
@@ -70,8 +70,8 @@ class Method2Rewarder:
     """
     seeds: List[str]
     de_old: List[float]
-    mt: MTEnDe
-    qe: COMETQE
+    #mt: MTEnDe
+    qe: Sentinel #COMETQE
     vf: LMVerifier
     x: float = 1.0
     y: float = 0.3
@@ -99,8 +99,8 @@ class Method2Rewarder:
         Compute rewards for the given edits.
         indices: which seeds these edits correspond to (for selecting de_old)
         """
-        t1 = self.mt.translate(edits)
-        de_new = self.qe.difficulty(edits, t1)
+        #t1 = self.mt.translate(edits)
+        de_new = self.qe.difficulty(edits) #self.qe.difficulty(edits, t1)
         cons = constraint_score(edits)
         ver = self.vf.score(edits)
         # Select the corresponding de_old values for this batch
@@ -233,16 +233,22 @@ def main():
     prompts_all = build_prompts(seeds, tok)
 
     # ---- external scorers ----
-    mt = MTEnDe(device=args.mt_device)
-    qe = COMETQE(accelerator_preference=args.comet_accelerator)            # wmt22-cometkiwi-da (reference-free)
+    #mt = MTEnDe(device=args.mt_device)
+    qe = Sentinel() #COMETQE(accelerator_preference=args.comet_accelerator)            # wmt22-cometkiwi-da (reference-free)
     vf = LMVerifier(device=args.lm_verifier_device)
 
     # Precompute de_old once (1 - QE(s0, t0))
-    t0 = mt.translate(seeds)
-    de_old = qe.difficulty(seeds, t0)
+    #t0 = mt.translate(seeds)
+    de_old = qe.difficulty(seeds) #qe.difficulty(seeds, t0)
 
+    # rewarder = Method2Rewarder(
+    #     seeds=seeds, de_old=de_old, mt=mt, qe=qe, vf=vf,
+    #     x=args.x, y=args.y, z=args.z, f=args.f,
+    #     normalize_rewards=args.normalize_rewards,
+    #     clip_normalized=args.clip_normalized
+    # )
     rewarder = Method2Rewarder(
-        seeds=seeds, de_old=de_old, mt=mt, qe=qe, vf=vf,
+        seeds=seeds, de_old=de_old, qe=qe, vf=vf,
         x=args.x, y=args.y, z=args.z, f=args.f,
         normalize_rewards=args.normalize_rewards,
         clip_normalized=args.clip_normalized

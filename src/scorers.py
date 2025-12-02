@@ -4,11 +4,29 @@ from typing import List, Dict
 import torch
 import numpy as np
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from comet import download_model, load_from_checkpoint
+
 from langdetect import detect, LangDetectException
+from sentinel_metric import download_model as sentinel_download_model, load_from_checkpoint as sentinel_load_from_checkpoint
+
+from comet import download_model as comet_download_model, load_from_checkpoint as comet_load_from_checkpoint
+
+
+
+# cloned locally instead of pip install because of issues with sentinel_metric
+# https://huggingface.co/Prosho/sentinel-src-25
+class Sentinel:
+    def __init__(self):
+        ckpt = sentinel_download_model("Prosho/sentinel-src-25")
+        self.model = sentinel_load_from_checkpoint(ckpt)
+
+    def difficulty(self, sentences: List[str]) -> List[float]:
+        data = [{"src": s} for s in sentences]
+        out = self.model.predict(data, batch_size = 8, gpus = 1)
+        return [1.0 - score for score in out.scores]
 
 # -------- COMET QE (reference-free) --------
 
+#QE_MODEL = "wmt21-comet-qe-da"
 QE_MODEL = "Unbabel/wmt22-cometkiwi-da"  # public, supported in unbabel-comet 2.2.x
 
 class COMETQE:
@@ -16,8 +34,8 @@ class COMETQE:
     Wrap COMET QE to compute difficulty = 1 - QE(src, mt).
     """
     def __init__(self, model_name: str = QE_MODEL, accelerator_preference: str = "gpu"):
-        ckpt = download_model(model_name)   # handles local cache
-        self.model = load_from_checkpoint(ckpt)
+        ckpt = comet_download_model(model_name)   # handles local cache
+        self.model = comet_load_from_checkpoint(ckpt)
         self.accelerator_preference = accelerator_preference
         try:
             if hasattr(self.model, "trainer"):
@@ -96,25 +114,22 @@ class COMETQE:
 
 def test_comet_qe():
     qe = COMETQE()
-    src = ["The cat sat on the mat."]    
+    sen = Sentinel()
+    src_easy = ["The sky was cloudy."] #["The cat sat on the mat."]
+    src_harder = ["Going back up tomorrow; we’re doing stalls and coffin corner practice drills to nail it on the checkride."] #["He read a novel that was written by an author who was known for his ability to create intricate and complex characters."]    
     # Test good translation (correct German translation)
-    mt_good = ["Die Katze saß auf der Matte."]
-    difficulty_good = qe.difficulty(src, mt_good)
-    print(f"Good mt: {difficulty_good}")
+    mt_easy = ["Der Himmel war bewölkt."] #["Die Katze saß auf der Matte."]
+    mt_harder = ["Morgen geht es wieder hoch; wir machen Übungen zu Strömungsabrissen und dem kritischen Geschwindigkeitsbereich, um das bei der Prüfungsfahrt perfekt hinzubekommen."] #["Er las einen Roman, der von einem Autor geschrieben wurde, der für seine Fähigkeit bekannt war, komplizierte und komplexe Charaktere zu erschaffen."]
+    difficulty_qe_easy = qe.difficulty(src_easy, mt_easy)
+    difficulty_qe_harder = qe.difficulty(src_harder, mt_harder)
+    difficulty_sen_easy = sen.difficulty(src_easy)
+    difficulty_sen_harder = sen.difficulty(src_harder)
+    print("The higher the score, the harder the translation.")
+    print(f"QE score easy: {difficulty_qe_easy}")
+    print(f"QE score harder: {difficulty_qe_harder}")
+    print(f"Sentinel score easy: {difficulty_sen_easy}")
+    print(f"Sentinel score harder: {difficulty_sen_harder}")
 
-    # Test good translation, but with a typo
-    mt_good_typo = ["Die Katze sas auf der Matte."]
-    difficulty_good_typo = qe.difficulty(src, mt_good_typo)
-    print(f"Good mt_typo: {difficulty_good_typo}")
-    
-    # Test bad translation (wrong meaning)
-    mt_bad = ["Der Hund rannte im Garten."] 
-    difficulty_bad = qe.difficulty(src, mt_bad)
-    print(f"Bad mt: {difficulty_bad}")
-    
-    # Note: The "bad" translation is grammatically valid German (just wrong meaning),
-    # so the difference might be smaller than expected. For a more dramatic difference,
-    # try a translation with grammatical errors or nonsensical output.
     print("Test complete.")
 
 # -------- Verifier (LM perplexity) --------
@@ -250,5 +265,5 @@ def test_verifier():
     print(f"Three sentences score: {three_sentences}") # Should be 0.0
 
 if __name__ == "__main__":
-    # test_comet_qe()
-    test_verifier()
+    test_comet_qe()
+    # test_verifier()
