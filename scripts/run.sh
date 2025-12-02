@@ -15,10 +15,15 @@ mkdir -p logs
 
 python -m src.RL_ppo_training \
   --seeds data/seeds.txt \
-  --k 500 \
-  --x 3.0 \
-  --y 1.0 \
-  --z 0.3 \
-  --steps 500 \
-  --batch_size 2 \
-  --temperature 0.4
+  --k 800 \
+  # delta difficulty
+  --x 1.0 \
+  # verifier score
+  --y 2.0 \
+  # constraint score
+  --z 2.0 \
+  --steps 600 \
+  --batch_size 4 \
+  --temperature 0.4 \
+  --save_dir "checkpoints/stage-1" \
+  --resume_from_checkpoint "checkpoints/stage-2/"

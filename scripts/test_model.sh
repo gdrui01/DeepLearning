@@ -13,4 +13,5 @@ source "$HOME/venvs/mtbreaker/bin/activate"
 cd "$HOME/DeepLearning/"
 mkdir -p logs
 
-python test_scripts/test_model_inference.py
+# python test_scripts/test_model_inference.py
+python test_scripts/test_model_inference.py --checkpoint "checkpoints/stage-2/" --base-model "Qwen/Qwen3-0.6B-Base"

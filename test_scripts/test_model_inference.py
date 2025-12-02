@@ -47,9 +47,17 @@ model = AutoModelForCausalLM.from_pretrained(
 )
 
 # prepare the model input
-prompt = """Rewrite this sentence to be extremely difficult for machine translation using idioms, ambiguity, and wordplay, while keeping it grammatically correct English: "They walked towards the park's entrance."
+prompt = (
+    """
+    Rewrite the following sentence to be extremely difficult for machine translation using idioms, ambiguity, and wordplay while keeping it grammatically correct English. Return only plain text without any formatting, markdown, or special characters. Output only a single edited sentence:
 
-Only return the single edited sentence."""
+    "He read a novel."
+    """
+)
+
+# prompt = """Rewrite this sentence to be extremely difficult for machine translation using idioms, ambiguity, and wordplay, while keeping it grammatically correct English: "They walked towards the park's entrance."
+
+# Only return the single edited sentence."""
 # prompt = """Easy to translate sentence: "It was a rainy day."
 #         Hard to translate sentence:
 # """
@@ -78,7 +86,7 @@ generated_ids = model.generate(
     # eos_token_id=tokenizer.eos_token_id,
     # do_sample=True,
     # temperature=0.4,
-    max_new_tokens=100 # 1024 # 32768
+    max_new_tokens=45 # 1024 # 32768
 )
 output_ids = generated_ids[0][len(model_inputs.input_ids[0]):].tolist() 
 
