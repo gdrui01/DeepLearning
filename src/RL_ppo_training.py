@@ -77,6 +77,8 @@ class Method2Rewarder:
     y: float = 0.3
     z: float = 0.3
     f: str = "relu"
+    constraint_threshold: float = 0.5
+    constraint_sharpness: float = 10.0
     normalize_rewards: bool = False
     clip_normalized: float = 3.0
     delta_normalizer: Optional[RewardNormalizer] = None
@@ -116,7 +118,9 @@ class Method2Rewarder:
             x=self.x, y=self.y, z=self.z, f=self.f,
             normalizers=normalizers,
             normalize_rewards=self.normalize_rewards,
-            clip_normalized=self.clip_normalized if self.normalize_rewards else None
+            clip_normalized=self.clip_normalized if self.normalize_rewards else None,
+            constraint_threshold=self.constraint_threshold,
+            constraint_sharpness=self.constraint_sharpness
         )
         # PPO wants rewards (higher is better)
         return [float(l) for l in L], cons, ver, delta.tolist()
@@ -172,6 +176,9 @@ def main():
     ap.add_argument("--y", type=float, default=1.0)
     ap.add_argument("--z", type=float, default=0.3)
     ap.add_argument("--f", type=str, default="none", choices=["relu","sigmoid","none"])
+    # constraint gating
+    ap.add_argument("--constraint_threshold", type=float, default=0.5, help="Threshold for soft gating of difficulty reward (default 0.5)")
+    ap.add_argument("--constraint_sharpness", type=float, default=10.0, help="Sharpness of sigmoid gate - higher = sharper transition (default 10.0)")
     # reward normalization
     ap.add_argument("--normalize_rewards", action="store_true", help="Enable reward normalization (z-score)")
     ap.add_argument("--clip_normalized", type=float, default=3.0, help="Clip normalized rewards to [-N, +N] std devs")
@@ -205,6 +212,8 @@ def main():
                 "loss_y": args.y,
                 "loss_z": args.z,
                 "loss_f": args.f,
+                "constraint_threshold": args.constraint_threshold,
+                "constraint_sharpness": args.constraint_sharpness,
                 "normalize_rewards": args.normalize_rewards,
                 "clip_normalized": args.clip_normalized,
                 "seed": args.seed,
@@ -250,6 +259,8 @@ def main():
     rewarder = Method2Rewarder(
         seeds=seeds, de_old=de_old, qe=qe, vf=vf,
         x=args.x, y=args.y, z=args.z, f=args.f,
+        constraint_threshold=args.constraint_threshold,
+        constraint_sharpness=args.constraint_sharpness,
         normalize_rewards=args.normalize_rewards,
         clip_normalized=args.clip_normalized
     )

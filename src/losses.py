@@ -52,6 +52,8 @@ def method2_loss(
     normalizers: Optional[Tuple[RewardNormalizer, RewardNormalizer, RewardNormalizer]] = None,
     normalize_rewards: bool = False,
     clip_normalized: Optional[float] = None,
+    constraint_threshold: float = 0.5,
+    constraint_sharpness: float = 10.0,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Compute combined reward from difficulty delta, verifier, and constraint scores.
@@ -68,6 +70,8 @@ def method2_loss(
         normalizers: Tuple of (delta_normalizer, verifier_normalizer, constraint_normalizer)
         normalize_rewards: Whether to normalize rewards before combining
         clip_normalized: Optional clipping value for normalized rewards (e.g., 3.0 for ±3 std)
+        constraint_threshold: Threshold for soft gating (default 0.5)
+        constraint_sharpness: Sharpness of the sigmoid gate (higher = sharper transition, default 10.0)
 
     Returns:
         Tuple of (combined_rewards, raw_delta_values)
@@ -83,6 +87,13 @@ def method2_loss(
     elif f == "sigmoid":
         delta = 1/(1 + np.exp(-delta))
 
+    # Soft gating: difficulty reward is modulated by constraint satisfaction
+    # constraint_weight = sigmoid((cons - threshold) * sharpness)
+    # When cons >> threshold: weight → 1.0 (full difficulty reward)
+    # When cons << threshold: weight → 0.0 (no difficulty reward)
+    # When cons ≈ threshold: smooth transition
+    constraint_weight = 1.0 / (1.0 + np.exp(-constraint_sharpness * (cons - constraint_threshold)))
+
     # Normalize rewards if requested
     if normalize_rewards and normalizers is not None:
         delta_norm, ver_norm, cons_norm = normalizers
@@ -97,10 +108,10 @@ def method2_loss(
         ver_normalized = ver_norm.normalize(ver, clip=clip_normalized)
         cons_normalized = cons_norm.normalize(cons, clip=clip_normalized)
 
-        # Combine normalized rewards
-        sum_reward = x*delta_normalized + y*ver_normalized + z*cons_normalized
+        # Combine normalized rewards with soft gating
+        sum_reward = x*delta_normalized*constraint_weight + y*ver_normalized + z*cons_normalized
     else:
-        # Original behavior: combine raw rewards
-        sum_reward = x*delta + y*ver + z*cons
+        # Combine raw rewards with soft gating
+        sum_reward = x*delta*constraint_weight + y*ver + z*cons
 
     return sum_reward, delta
