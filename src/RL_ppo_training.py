@@ -405,16 +405,26 @@ def main():
             checkpoint_state = torch.load(checkpoint_state_path, map_location=device)
 
             # Restore optimizer and scheduler
+            # Note: Optimizer state dict may contain CUDA tensors that need to be on the correct device
             optimizer.load_state_dict(checkpoint_state["optimizer_state_dict"])
             lr_scheduler.load_state_dict(checkpoint_state["scheduler_state_dict"])
+            print("Restored optimizer and scheduler states from checkpoint")
 
             # Restore random states for reproducibility
             if "random_state" in checkpoint_state:
                 random.setstate(checkpoint_state["random_state"])
             if "torch_random_state" in checkpoint_state:
-                torch.set_rng_state(checkpoint_state["torch_random_state"])
+                # Ensure the state is a CPU ByteTensor
+                rng_state = checkpoint_state["torch_random_state"]
+                if not rng_state.is_cpu:
+                    rng_state = rng_state.cpu()
+                torch.set_rng_state(rng_state)
             if "torch_cuda_random_state" in checkpoint_state and torch.cuda.is_available():
-                torch.cuda.set_rng_state(checkpoint_state["torch_cuda_random_state"])
+                # CUDA RNG state should also be on CPU when loaded
+                cuda_rng_state = checkpoint_state["torch_cuda_random_state"]
+                if not cuda_rng_state.is_cpu:
+                    cuda_rng_state = cuda_rng_state.cpu()
+                torch.cuda.set_rng_state(cuda_rng_state)
 
             # Restore reward normalizer states if they exist
             if args.normalize_rewards and "delta_normalizer" in checkpoint_state:
@@ -610,10 +620,10 @@ def main():
                 "optimizer_state_dict": optimizer.state_dict(),
                 "scheduler_state_dict": lr_scheduler.state_dict(),
                 "random_state": random.getstate(),
-                "torch_random_state": torch.get_rng_state(),
+                "torch_random_state": torch.get_rng_state().cpu(),  # Must be on CPU
             }
             if torch.cuda.is_available():
-                training_state["torch_cuda_random_state"] = torch.cuda.get_rng_state()
+                training_state["torch_cuda_random_state"] = torch.cuda.get_rng_state().cpu()  # Must be on CPU
 
             # Save reward normalizer states if enabled
             if args.normalize_rewards:
@@ -654,10 +664,10 @@ def main():
         "optimizer_state_dict": optimizer.state_dict(),
         "scheduler_state_dict": lr_scheduler.state_dict(),
         "random_state": random.getstate(),
-        "torch_random_state": torch.get_rng_state(),
+        "torch_random_state": torch.get_rng_state().cpu(),  # Must be on CPU
     }
     if torch.cuda.is_available():
-        final_training_state["torch_cuda_random_state"] = torch.cuda.get_rng_state()
+        final_training_state["torch_cuda_random_state"] = torch.cuda.get_rng_state().cpu()  # Must be on CPU
 
     # Save reward normalizer states if enabled
     if args.normalize_rewards:
