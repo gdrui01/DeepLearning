@@ -16,8 +16,8 @@ from .scorers import COMETQE, LMVerifier, Sentinel
 from .constraints import constraint_score
 from .losses import method2_loss, RewardNormalizer
 
-PPO_EPOCHS = 2
-LR = 1e-4 # 5e-5
+PPO_EPOCHS = 4
+LR = 5e-5 # 1e-4
 
 DEFAULT_BASE = "Qwen/Qwen3-0.6B-Base"
 
@@ -327,7 +327,7 @@ def main():
     # For Qwen3-0.6B: ~1.2B parameters total (2x 0.6B), with FP32 weights this is ~4.8GB
     # Plus activations, gradients, optimizer states, and generation buffers = easily 10-11GB on 1080Ti
 
-    optimizer = SGD(policy.parameters(), lr=LR)
+    optimizer = SGD(policy.parameters(), lr=LR, momentum=0.8)
     num_training_steps = args.steps * PPO_EPOCHS
     lr_scheduler = get_constant_schedule_with_warmup( # get_linear_schedule_with_warmup
         optimizer,
@@ -344,7 +344,7 @@ def main():
         ppo_epochs=PPO_EPOCHS,                  # Reduced from 4 to save memory (fewer forward/backward passes)
         cliprange=0.2,
         cliprange_value=0.2,           # Clip value function updates
-        vf_coef=0.5,                   # Value function coefficient
+        vf_coef=0.2,                   # Value function coefficient
         kl_penalty="kl",
         init_kl_coef=0.2,              # Higher initial KL penalty (was 0.05)
         target_kl=0.1,                 # Lower target KL to prevent divergence (was 0.15)

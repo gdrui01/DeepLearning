@@ -10,9 +10,9 @@
 module add cuda/12.6
 
 source "$HOME/venvs/mtbreaker/bin/activate"
-cd "$HOME/DeepLearning/"
+cd "/work/scratch/mbehanzin/DeepLearning/"
 mkdir -p logs
 
 # python -m src.scorers
 # python test_scripts/test_model_inference.py
-python test_scripts/test_model_inference.py --checkpoint "checkpoints/stage-x/" --base-model "Qwen/Qwen3-0.6B-Base"
+python test_scripts/test_model_inference.py --checkpoint "checkpoints/stage-1/" --base-model "Qwen/Qwen3-0.6B-Base"
