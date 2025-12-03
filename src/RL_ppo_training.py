@@ -271,10 +271,27 @@ def main():
     model_path = args.resume_from_checkpoint if args.resume_from_checkpoint else args.base_model
     if args.resume_from_checkpoint:
         print(f"Resuming from checkpoint: {args.resume_from_checkpoint}")
-    policy = AutoModelForCausalLMWithValueHead.from_pretrained(
-        model_path,
+        # Verify checkpoint directory contains model files
+        checkpoint_files = os.listdir(args.resume_from_checkpoint)
+        print(f"Checkpoint directory contains: {checkpoint_files}")
+
+        # Check for required model files
+        required_files = ['pytorch_model.bin', 'config.json']  # Standard HF checkpoint files
+        missing_files = [f for f in required_files if f not in checkpoint_files]
+        if missing_files:
+            print(f"WARNING: Missing expected checkpoint files: {missing_files}")
+            print("This may cause issues loading the checkpoint. Falling back to base model.")
+            model_path = args.base_model
+
+    # Configure model for gradient checkpointing compatibility
+    model_config = {
         # Don't specify torch_dtype - let it load in default precision (FP32)
         # Mixed precision training will handle the conversion for memory efficiency
+    }
+
+    policy = AutoModelForCausalLMWithValueHead.from_pretrained(
+        model_path,
+        **model_config
     )
 
     # DEBUG: Check if weights are actually loaded
@@ -287,12 +304,25 @@ def main():
     if torch.cuda.is_available():
         policy = policy.to(device)
         print(f"GPU memory after policy load: {torch.cuda.memory_allocated(device)/1e9:.2f} GB allocated, {torch.cuda.memory_reserved(device)/1e9:.2f} GB reserved")
-    
+
     # Enable gradient checkpointing to save memory during training
+    # IMPORTANT: Must disable use_cache for gradient checkpointing to work
     if hasattr(policy.pretrained_model, 'gradient_checkpointing_enable'):
         policy.pretrained_model.gradient_checkpointing_enable()
         print("Gradient checkpointing enabled")
-    
+
+    # Explicitly disable caching for gradient checkpointing compatibility
+    if hasattr(policy.pretrained_model.config, 'use_cache'):
+        policy.pretrained_model.config.use_cache = False
+        print("Model cache disabled for gradient checkpointing compatibility")
+
+    # Ensure all model parameters require gradients (critical for training)
+    # When loading from checkpoint, params might not have requires_grad set properly
+    policy.train()  # Set to training mode
+    for param in policy.parameters():
+        param.requires_grad = True
+    print(f"Model parameters set to trainable. Total params: {sum(p.numel() for p in policy.parameters() if p.requires_grad):,}")
+
     # TRL will create a frozen reference model internally (this doubles memory usage!)
     # For Qwen3-0.6B: ~1.2B parameters total (2x 0.6B), with FP32 weights this is ~4.8GB
     # Plus activations, gradients, optimizer states, and generation buffers = easily 10-11GB on 1080Ti
@@ -362,8 +392,35 @@ def main():
         if os.path.exists(checkpoint_state_path):
             print(f"Loading training state from: {checkpoint_state_path}")
             checkpoint_state = torch.load(checkpoint_state_path, map_location=device)
+
+            # Restore optimizer and scheduler
             optimizer.load_state_dict(checkpoint_state["optimizer_state_dict"])
             lr_scheduler.load_state_dict(checkpoint_state["scheduler_state_dict"])
+
+            # Restore random states for reproducibility
+            if "random_state" in checkpoint_state:
+                random.setstate(checkpoint_state["random_state"])
+            if "torch_random_state" in checkpoint_state:
+                torch.set_rng_state(checkpoint_state["torch_random_state"])
+            if "torch_cuda_random_state" in checkpoint_state and torch.cuda.is_available():
+                torch.cuda.set_rng_state(checkpoint_state["torch_cuda_random_state"])
+
+            # Restore reward normalizer states if they exist
+            if args.normalize_rewards and "delta_normalizer" in checkpoint_state:
+                rewarder.delta_normalizer.mean = checkpoint_state["delta_normalizer"]["mean"]
+                rewarder.delta_normalizer.var = checkpoint_state["delta_normalizer"]["var"]
+                rewarder.delta_normalizer.count = checkpoint_state["delta_normalizer"]["count"]
+
+                rewarder.verifier_normalizer.mean = checkpoint_state["verifier_normalizer"]["mean"]
+                rewarder.verifier_normalizer.var = checkpoint_state["verifier_normalizer"]["var"]
+                rewarder.verifier_normalizer.count = checkpoint_state["verifier_normalizer"]["count"]
+
+                rewarder.constraint_normalizer.mean = checkpoint_state["constraint_normalizer"]["mean"]
+                rewarder.constraint_normalizer.var = checkpoint_state["constraint_normalizer"]["var"]
+                rewarder.constraint_normalizer.count = checkpoint_state["constraint_normalizer"]["count"]
+
+                print("Restored reward normalizer states from checkpoint")
+
             start_step = checkpoint_state["step"] + 1  # Resume from next step
             print(f"Resuming from step {start_step}")
         else:
@@ -528,24 +585,87 @@ def main():
             print(f"Sample output: {cleaned[0][:100]}...")
 
         if (step + 1) % 20 == 0:
+            # Save the full model (both pretrained_model and v_head)
+            # Use trainer.save_pretrained() which saves the model with value head
             trainer.save_pretrained(args.save_dir)
-            # Save training state (optimizer, scheduler, step)
+
+            # Also explicitly save the model's config to ensure proper loading
+            if hasattr(policy.pretrained_model, 'config'):
+                policy.pretrained_model.config.save_pretrained(args.save_dir)
+
+            # Save training state (optimizer, scheduler, step, normalizers)
             training_state = {
                 "step": step,
                 "optimizer_state_dict": optimizer.state_dict(),
                 "scheduler_state_dict": lr_scheduler.state_dict(),
+                "random_state": random.getstate(),
+                "torch_random_state": torch.get_rng_state(),
             }
+            if torch.cuda.is_available():
+                training_state["torch_cuda_random_state"] = torch.cuda.get_rng_state()
+
+            # Save reward normalizer states if enabled
+            if args.normalize_rewards:
+                training_state["delta_normalizer"] = {
+                    "mean": rewarder.delta_normalizer.mean,
+                    "var": rewarder.delta_normalizer.var,
+                    "count": rewarder.delta_normalizer.count,
+                }
+                training_state["verifier_normalizer"] = {
+                    "mean": rewarder.verifier_normalizer.mean,
+                    "var": rewarder.verifier_normalizer.var,
+                    "count": rewarder.verifier_normalizer.count,
+                }
+                training_state["constraint_normalizer"] = {
+                    "mean": rewarder.constraint_normalizer.mean,
+                    "var": rewarder.constraint_normalizer.var,
+                    "count": rewarder.constraint_normalizer.count,
+                }
+
             torch.save(training_state, os.path.join(args.save_dir, "training_state.pt"))
+
+            # Verify checkpoint files exist
+            checkpoint_files = os.listdir(args.save_dir)
+            print(f"Checkpoint saved at step {step + 1}. Files: {checkpoint_files}")
+
             torch.cuda.empty_cache()
 
     # final save
     trainer.save_pretrained(args.save_dir)
+
+    # Also explicitly save the model's config to ensure proper loading
+    if hasattr(policy.pretrained_model, 'config'):
+        policy.pretrained_model.config.save_pretrained(args.save_dir)
+
     # Save final training state
     final_training_state = {
         "step": args.steps - 1,  # Last step completed
         "optimizer_state_dict": optimizer.state_dict(),
         "scheduler_state_dict": lr_scheduler.state_dict(),
+        "random_state": random.getstate(),
+        "torch_random_state": torch.get_rng_state(),
     }
+    if torch.cuda.is_available():
+        final_training_state["torch_cuda_random_state"] = torch.cuda.get_rng_state()
+
+    # Save reward normalizer states if enabled
+    if args.normalize_rewards:
+        final_training_state["delta_normalizer"] = {
+            "mean": rewarder.delta_normalizer.mean,
+            "var": rewarder.delta_normalizer.var,
+            "count": rewarder.delta_normalizer.count,
+        }
+        final_training_state["verifier_normalizer"] = {
+            "mean": rewarder.verifier_normalizer.mean,
+            "var": rewarder.verifier_normalizer.var,
+            "count": rewarder.verifier_normalizer.count,
+        }
+        final_training_state["constraint_normalizer"] = {
+            "mean": rewarder.constraint_normalizer.mean,
+            "var": rewarder.constraint_normalizer.var,
+            "count": rewarder.constraint_normalizer.count,
+        }
+
     torch.save(final_training_state, os.path.join(args.save_dir, "training_state.pt"))
     print(f"Saved PPO policy to: {args.save_dir}")
 
