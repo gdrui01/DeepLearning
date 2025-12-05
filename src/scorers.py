@@ -19,6 +19,14 @@ class Sentinel:
         data = [{"src": s} for s in sentences]
         out = self.model.predict(data, batch_size = 8, gpus = 1)
         return out.scores
+    
+    # depending on how we use in pipeline need to adjust behavior for a whole batch vs single example
+    # using tanh to map also to negative values and penalize decreases in difficulty
+    def get_difference_tanh(self, de_before, de_after):
+        delta = de_before - de_after
+        score = math.tanh(delta) # apply on delta and not individual scores such that same delta always maps to same score
+        return score
+
 
 
 # -------- COMET QE (reference-free) --------
@@ -143,7 +151,7 @@ class LMVerifier:
     """
     def __init__(self, name: str = VERIFIER_LM, device: str | None = None,
                 P_min: float = 40.0,   # "good" perplexity
-                P_max: float = 200.0,  # "bad" perplexity
+                P_max: float = 200.0,  # "bad" perplexity maybe change to 300
                 ):
         self.tok = AutoTokenizer.from_pretrained(name)
         if self.tok.pad_token is None:
@@ -172,11 +180,11 @@ class LMVerifier:
         if enc["input_ids"].numel() == 0:
             return [0.0] * len(sentences)
 
-        input_ids = enc["input_ids"]           # [B, L]
+        input_ids = enc["input_ids"] # [B, L]
         attention_mask = enc["attention_mask"] # [B, L]
 
         outputs = self.model(input_ids, attention_mask=attention_mask)
-        logits = outputs.logits                # [B, L, V]
+        logits = outputs.logits # [B, L, V]
 
         # shift for next-token prediction
         shift_logits = logits[:, :-1, :]  # [B, L-1, V]
@@ -196,12 +204,15 @@ class LMVerifier:
         # maybe not necessary
         lengths = torch.clamp(lengths, min=1)
 
-        # Negative log-likelihood per sentence
+        # negative log-likelihood per sentence
         nll = -(token_log_probs.sum(dim=-1) / lengths)
 
         # calculated perplexity
         ppl = torch.exp(nll)
         scores = []
+
+
+        # penalize if model creates multiple sentences?
         for p in ppl.cpu().tolist():
             p = max(1e-6, float(p))
             lp = math.log(p)
@@ -209,6 +220,10 @@ class LMVerifier:
             # linear mapping in log space
             raw = (self.log_P_max - lp) / (self.log_P_max - self.log_P_min)
             s = max(0.0, min(1.0, raw))
+
+            # included threshold map to not penalize (we could have a sentence that makes sense but is hard to translate which we don't want to penalize)
+            if s >= 0.3:
+                s = 1.0
             scores.append(s)
 
         return scores
@@ -216,13 +231,11 @@ class LMVerifier:
 def test_verifier():
     verifier = LMVerifier()
     good_score = verifier.score(["Because the storm had intensified rapidly, the coastal town evacuated all residents."])
-    print(f"Good score: {good_score}") # 1.0
+    print(f"Good score: {good_score}")
     bad_score = verifier.score(["Tables green upside flipping extreme sword fight."])
-    print(f"Bad score: {bad_score}") # 0.004
+    print(f"Bad score: {bad_score}")
     very_bad_score = verifier.score(["Jhgjasd dsafjklhref, fkssgh sjh sfkhas fjhfe."])
-    print(f"Very bad score: {very_bad_score}") # 0.35 (!!) (Although gibberish, the score
-    # is still higher than the bad score, because the model splits the sentence into
-    # much smaller tokens that are still "somewhat" meaningful.)
+    print(f"Very bad score: {very_bad_score}")
 
 if __name__ == "__main__":
     # test_comet_qe()
