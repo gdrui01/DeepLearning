@@ -1,7 +1,6 @@
 import os, argparse, random
 from dataclasses import dataclass
 from typing import List
-
 import numpy as np
 import torch
 from torch.optim import SGD
@@ -16,6 +15,9 @@ from scorers import COMETQE, LMVerifier
 from constraints import constraint_score
 from losses import method2_loss
 
+from datasets import load_dataset
+from torch.utils.data import DataLoader
+from torch.utils.data import Dataset
 
 DEFAULT_BASE = "Qwen/Qwen3-0.6B-Base"
 DEFAULT_INSTRUCTION = (
@@ -49,10 +51,8 @@ class Method2Rewarder:
       - delta difficulty from COMET QE (reference-free)
       - constraint score
       - verifier (LM perplexity proxy -> higher better)
-    We precompute de_old = 1 - QE(s0, t0) for all seeds once to save time.
+    Now computes the baseline (de_old) per batch instead of globally.
     """
-    seeds: List[str]
-    de_old: List[float]
     mt: MTEnDe
     qe: COMETQE
     vf: LMVerifier
@@ -62,20 +62,32 @@ class Method2Rewarder:
     f: str = "relu"
 
     @torch.inference_mode()
-    def reward(self, edits: List[str], indices: List[int]) -> List[float]:
+    def reward(
+        self,
+        original_seeds: List[str],   # s0
+        edits: List[str],            # s1
+    ):
         """
-        Compute rewards for the given edits.
-        indices: which seeds these edits correspond to (for selecting de_old)
+        original_seeds: the unedited sentences (batch)
+        edits:          the model's rewritten sentences (batch)
         """
+        # baseline difficulty
+        t0 = self.mt.translate(original_seeds)
+        de_old = self.qe.difficulty(original_seeds, t0)
+
+        # new difficulty
         t1 = self.mt.translate(edits)
         de_new = self.qe.difficulty(edits, t1)
+
         cons = constraint_score(edits)
         ver = self.vf.score(edits)
-        # Select the corresponding de_old values for this batch
-        de_old_batch = [self.de_old[i] for i in indices]
-        L = method2_loss(de_new, de_old_batch, cons, ver, x=self.x, y=self.y, z=self.z, f=self.f)
-        # PPO wants rewards (higher is better)
-        delta = de_new - np.array(de_old_batch)
+
+        L = method2_loss(de_new, de_old, cons, ver,
+                         x=self.x, y=self.y, z=self.z, f=self.f)
+
+        delta = de_new - np.array(de_old)  # difficulty increase
+
+        # PPO wants high reward => -loss
         return [-float(l) for l in L], cons, ver, delta.tolist()
 
 
@@ -98,10 +110,52 @@ def build_prompts(seeds: List[str], tokenizer) -> List[str]:
         prompts.append(instruction)
     return prompts
 
+class PromptDataset(Dataset):
+    def __init__(self, seeds, tokenizer):
+        """
+        seeds: list of strings (plain sentences)
+        tokenizer: HF tokenizer (we only use it for build_prompts)
+        """
+        self.original_seeds = list(seeds)  # keep original seeds for rewarder
+        self.prompts = build_prompts(self.original_seeds, tokenizer)
+
+    def __len__(self):
+        return len(self.prompts)
+
+    def __getitem__(self, idx):
+        # We return both the prompt and the index so the rewarder
+        # can look up de_old[idx] later.
+        return {
+            "prompt": self.prompts[idx],
+            "idx": idx,
+        }
+    
+class huggingfaceDataset(Dataset):
+    def __init__(self, hf_dataset, tokenizer):
+        """
+        hf_dataset: Huggingface dataset object (streaming or not)
+        tokenizer: HF tokenizer (we only use it for build_prompts)
+        """
+        self.hf_dataset = hf_dataset
+        self.original_seeds = hf_dataset['text']
+        self.prompts = build_prompts(self.original_seeds, tokenizer)
+
+    def __len__(self):
+        return len(self.prompts)
+
+    def __getitem__(self, idx):
+        # We return both the prompt and the index so the rewarder
+        # can look up de_old[idx] later.
+        return {
+            "prompt": self.prompts[idx],
+            "idx": idx,
+        }
+
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seeds", type=str, default="data/seeds.txt")
+    ap.add_argument("--dataset", type=str, default="agentlans/high-quality-english-sentences", help="optional dataset")
     ap.add_argument("--k", type=int, default=500, help="num seeds to use")
     ap.add_argument("--base_model", type=str, default=DEFAULT_BASE)
     ap.add_argument("--save_dir", type=str, default="checkpoints/gpt2-ppo-method2")
@@ -168,22 +222,21 @@ def main():
     tok.padding_side = "left"  # Required for batch generation with causal LMs
 
     # ---- data ----
-    seeds = read_seeds(args.seeds, args.k)
-    if not seeds:
-        raise SystemExit(f"No seeds found in {args.seeds}")
-    prompts_all = build_prompts(seeds, tok)
+    if args.dataset:
+        hs_dataset = load_dataset(args.dataset, num_proc=4, split = "train")
+        dataset = huggingfaceDataset(hs_dataset, tok)
+    else :
+        dataset = PromptDataset(read_seeds(args.seeds, k=args.k), tok)
+
+    train_loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, num_workers=2)
 
     # ---- external scorers ----
     mt = MTEnDe(device=args.mt_device)
     qe = COMETQE(accelerator_preference=args.comet_accelerator)
     vf = LMVerifier(device=args.lm_verifier_device)
 
-    # Precompute de_old once (1 - QE(s0, t0))
-    t0 = mt.translate(seeds)
-    de_old = qe.difficulty(seeds, t0)
-
     rewarder = Method2Rewarder(
-        seeds=seeds, de_old=de_old, mt=mt, qe=qe, vf=vf,
+        mt=mt, qe=qe, vf=vf,
         x=args.x, y=args.y, z=args.z, f=args.f
     )
 
@@ -237,7 +290,7 @@ def main():
 
     ppo_config = PPOConfig(
         model_name=args.base_model,
-        # learning_rate=1e-4,            # Lower LR for more stable training
+        learning_rate=1e-4,            # Lower LR for more stable training
         batch_size=args.batch_size,    # samples used per PPO step
         mini_batch_size=1,             # Process one sample at a time to minimize memory usage
         gradient_accumulation_steps=1,
@@ -300,17 +353,27 @@ def main():
     policy.train()  # Set back to train mode
 
     # ---- PPO loop ----
-    n = len(prompts_all)
-    print(f"Starting PPO: seeds={n}, steps={args.steps}, batch={args.batch_size}")
+    n = len(dataset)
+    print(f"Starting PPO: seeds={len(dataset)}, steps={args.steps}, batch={args.batch_size}")
+
+    data_iter = iter(train_loader)
+
     for step in trange(args.steps, desc="PPO"):
-        # sample a mini-batch of prompts (cyclic with wrapping)
-        start = (step * args.batch_size) % n
-        idx = [(start + i) % n for i in range(args.batch_size)]
-        prompts = [prompts_all[i] for i in idx]
-        #print("Prompts: ", prompts)
+        # Get next batch from DataLoader, loop back to start if exhausted
+        try:
+            batch = next(data_iter)
+        except StopIteration:
+            data_iter = iter(train_loader)
+            batch = next(data_iter)
+
+        prompts = batch["prompt"]              # list of strings
+        idx = batch["idx"].tolist()            # list of ints, for de_old indexing
+
+        original_batch = [dataset.original_seeds[i] for i in idx]
+
         # 1) tokenize prompts
-        query_tensors = [tok(p, return_tensors="pt").input_ids.squeeze(0) for p in prompts] # looks sketchy?
-        query_tensors = [q.to(trainer.accelerator.device) for q in query_tensors] # move to device
+        query_tensors = [tok(p, return_tensors="pt").input_ids.squeeze(0) for p in prompts]
+        query_tensors = [q.to(trainer.accelerator.device) for q in query_tensors]
 
         # 2) generate responses
         # For causal models like Qwen3, we need to extract only the generated part (excluding the prompt)
@@ -364,7 +427,10 @@ def main():
         cleaned = [s if s else "." for s in cleaned]
 
         # 4) compute rewards (external scorers)
-        rewards_list, con_rewards, ver_rewards, diff_rewards = rewarder.reward(cleaned, idx)
+        rewards_list, con_rewards, ver_rewards, diff_rewards = rewarder.reward(
+            original_batch,   # s0: original sentences
+            cleaned,          # s1: edited sentences
+        )
         # Move rewards to the same device as query/response tensors (GPU)
         rewards = [torch.tensor(r, device=trainer.accelerator.device) for r in rewards_list]
 
