@@ -1,4 +1,4 @@
-import os, argparse, random
+import os, argparse, random, re
 from dataclasses import dataclass
 from typing import List
 import numpy as np
@@ -22,7 +22,7 @@ DEFAULT_BASE = "Qwen/Qwen3-0.6B-Base"
 DEFAULT_INSTRUCTION = (
     """Rewrite this sentence to be extremely difficult for machine translation using idioms, ambiguity, and wordplay, while keeping it grammatically correct English: "{seed}"
 
-    Only return the single edited sentence."""
+    Only return the single edited sentence in quotation marks."""
 )
 
 def read_seeds(path: str, k: int | None = None) -> List[str]:
@@ -33,6 +33,18 @@ def read_seeds(path: str, k: int | None = None) -> List[str]:
 def filter_by_word_count(input):
     word_count = len(input['text'].split())
     return word_count <= 200
+
+
+def extract_quoted_sentence(text: str) -> str | None:
+    """
+    Extract a sentence from quotation marks in the model's response.
+    Returns None if no quoted sentence is found.
+    """
+    # Try to find text within double quotes
+    match = re.search(r'"([^"]+)"', text)
+    if match:
+        return match.group(1)
+    return None
 
 
 @dataclass
@@ -64,8 +76,29 @@ class Method2Rewarder:
         # baseline difficulty
         de_old = self.qe.difficulty(original_seeds)
 
+        # Extract sentences from quotation marks in the model's response
+        # If extraction fails, we'll use the original difficulty (delta = 0)
+        extracted_edits = []
+        extraction_failed = []
+        for i, edit in enumerate(edits):
+            extracted = extract_quoted_sentence(edit)
+            if extracted is not None:
+                extracted_edits.append(extracted)
+                extraction_failed.append(False)
+            else:
+                # Use original seed as placeholder (will be overwritten with de_old)
+                extracted_edits.append(original_seeds[i])
+                extraction_failed.append(True)
+
         # new difficulty
-        de_new = self.qe.difficulty(edits)
+        de_new = self.qe.difficulty(extracted_edits)
+
+        # For failed extractions, set de_new = de_old so delta = 0
+        de_new = np.array(de_new)
+        de_old_arr = np.array(de_old)
+        for i, failed in enumerate(extraction_failed):
+            if failed:
+                de_new[i] = de_old_arr[i]
 
         cons = constraint_score(edits)
         ver = self.vf.score(edits)
@@ -73,7 +106,7 @@ class Method2Rewarder:
         L = method2_loss(de_new, de_old, cons, ver,
                          x=self.x, y=self.y, z=self.z, f=self.f)
 
-        delta = de_new - np.array(de_old)  # difficulty increase
+        delta = de_new - de_old_arr  # difficulty increase
 
         # PPO wants high reward
         return [float(l) for l in L], cons, ver, delta.tolist()
