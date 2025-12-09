@@ -6,7 +6,7 @@ from typing import List
 def constraint_score(
     sentences: List[str],
     min_len: int = 8,
-    max_len: int = 60, # we can tune min_len and max_len using the length distribution of the dataset
+    max_len: int = 200, # we can tune min_len and max_len using the length distribution of the dataset
 ) -> List[float]:
     scores = []
     for s in sentences:
