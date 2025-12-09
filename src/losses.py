@@ -12,7 +12,7 @@ def method2_loss(
     f: str = "relu",
 ) -> list[float]:
     """
-    L = 1 - ( x*(de(s,t) - de(s0,t0)) + y*constraint(s) + z*verify(s) ) / (x+y+z)
+    L = ( x*(de(s,t) - de(s0,t0)) + y*constraint(s) + z*verify(s) ) / (x+y+z)
     """
     de_new = np.array(de_new, dtype=float)
     de_old = np.array(de_old, dtype=float)
@@ -26,5 +26,5 @@ def method2_loss(
         delta = 1/(1 + np.exp(-delta))
 
     wsum = x + y + z
-    L = 1.0 - (x*delta + y*cons + z*ver) / wsum
+    L = (x*delta + y*cons + z*ver) / wsum
     return L.tolist()

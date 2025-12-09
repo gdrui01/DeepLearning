@@ -7,11 +7,10 @@ from torch.optim import SGD
 from tqdm import trange
 import wandb
 
-from transformers import AutoTokenizer, get_linear_schedule_with_warmup
+from transformers import AutoTokenizer, get_linear_schedule_with_warmup, get_constant_schedule_with_warmup
 from trl import PPOConfig, PPOTrainer, AutoModelForCausalLMWithValueHead
 
-from translate import MTEnDe
-from scorers import COMETQE, LMVerifier
+from scorers import COMETQE, LMVerifier, Sentinel
 from constraints import constraint_score
 from losses import method2_loss
 
@@ -25,18 +24,6 @@ DEFAULT_INSTRUCTION = (
 
     Only return the single edited sentence."""
 )
-# # Could be a better prompt
-# DEFAULT_INSTRUCTION = (
-#     """Easy sentence: "The weather is nice today."
-#     Difficult sentence: "The whether of whether or not to weather the storm is up in the air."
-
-#     Easy sentence: "He went to the bank."
-#     Difficult sentence: "He went to the bank, though whether for money or a riverbank remained unclear."
-
-#     Easy sentence: "{seed}"
-#     Difficult sentence:"""
-# )
-
 
 def read_seeds(path: str, k: int | None = None) -> List[str]:
     with open(path, "r", encoding="utf-8") as f:
@@ -53,8 +40,7 @@ class Method2Rewarder:
       - verifier (LM perplexity proxy -> higher better)
     Now computes the baseline (de_old) per batch instead of globally.
     """
-    mt: MTEnDe
-    qe: COMETQE
+    qe: Sentinel
     vf: LMVerifier
     x: float = 1.0
     y: float = 0.3
@@ -72,12 +58,10 @@ class Method2Rewarder:
         edits:          the model's rewritten sentences (batch)
         """
         # baseline difficulty
-        t0 = self.mt.translate(original_seeds)
-        de_old = self.qe.difficulty(original_seeds, t0)
+        de_old = self.qe.difficulty(original_seeds)
 
         # new difficulty
-        t1 = self.mt.translate(edits)
-        de_new = self.qe.difficulty(edits, t1)
+        de_new = self.qe.difficulty(edits)
 
         cons = constraint_score(edits)
         ver = self.vf.score(edits)
@@ -87,27 +71,19 @@ class Method2Rewarder:
 
         delta = de_new - np.array(de_old)  # difficulty increase
 
-        # PPO wants high reward => -loss
-        return [-float(l) for l in L], cons, ver, delta.tolist()
+        # PPO wants high reward
+        return [float(l) for l in L], cons, ver, delta.tolist()
 
 
 def build_prompts(seeds: List[str], tokenizer) -> List[str]:
     """
-    Build prompts using Qwen3's chat template format.
+    Build prompts.
     Returns list of formatted prompt strings ready for tokenization.
     """
     prompts = []
     for seed in seeds:
-        instruction = DEFAULT_INSTRUCTION.format(seed=seed)
-        # messages = [{"role": "user", "content": instruction}]
-        # # Apply chat template with thinking disabled for efficiency during PPO training
-        # formatted_prompt = tokenizer.apply_chat_template(
-        #     messages,
-        #     tokenize=False,
-        #     add_generation_prompt=True,
-        #     enable_thinking=False  # Disable thinking mode for faster generation during PPO
-        # )
-        prompts.append(instruction)
+        prompt = DEFAULT_INSTRUCTION.format(seed=seed)
+        prompts.append(prompt)
     return prompts
 
 class PromptDataset(Dataset):
@@ -155,8 +131,9 @@ class huggingfaceDataset(Dataset):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seeds", type=str, default="data/seeds.txt")
-    ap.add_argument("--dataset", type=str, default="agentlans/high-quality-english-sentences", help="optional dataset")
+    ap.add_argument("--dataset", type=str, default="agentlans/high-quality-english-sentences", help="optional dataset(pass empty string for seeds.txt)")
     ap.add_argument("--k", type=int, default=500, help="num seeds to use")
+    ap.add_argument("--lr", type=float, default=1e-4, help="learning rate of the optimizer")
     ap.add_argument("--base_model", type=str, default=DEFAULT_BASE)
     ap.add_argument("--save_dir", type=str, default="checkpoints/gpt2-ppo-method2")
     ap.add_argument("--steps", type=int, default=200)           # PPO update steps
@@ -168,9 +145,9 @@ def main():
     ap.add_argument("--lm_verifier_device", type=str, default="cuda", choices=["cpu", "cuda"], help="Device for LM verifier scorer")
     ap.add_argument("--comet_accelerator", type=str, default="gpu", choices=["cpu", "gpu"], help="Accelerator used by COMET QE scorer")
     # loss weights
-    ap.add_argument("--x", type=float, default=1.0)
-    ap.add_argument("--y", type=float, default=0.3)
-    ap.add_argument("--z", type=float, default=0.3)
+    ap.add_argument("--x", type=float, default=1.0) # Weight on difficulty delta
+    ap.add_argument("--y", type=float, default=0.3) # Weight on constraints
+    ap.add_argument("--z", type=float, default=0.3) # Weight on verifier
     ap.add_argument("--f", type=str, default="none", choices=["relu","sigmoid","none"])
     ap.add_argument("--seed", type=int, default=42)
     # wandb
@@ -197,7 +174,7 @@ def main():
                 "base_model": args.base_model,
                 "steps": args.steps,
                 "batch_size": args.batch_size,
-                "learning_rate": 1e-4,
+                "learning_rate": args.lr,
                 "gen_max_new_tokens": args.gen_max_new_tokens,
                 "top_p": args.top_p,
                 "temperature": args.temperature,
@@ -231,12 +208,11 @@ def main():
     train_loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, num_workers=2)
 
     # ---- external scorers ----
-    mt = MTEnDe(device=args.mt_device)
     qe = COMETQE(accelerator_preference=args.comet_accelerator)
     vf = LMVerifier(device=args.lm_verifier_device)
 
     rewarder = Method2Rewarder(
-        mt=mt, qe=qe, vf=vf,
+        qe=qe, vf=vf,
         x=args.x, y=args.y, z=args.z, f=args.f
     )
 
@@ -284,20 +260,20 @@ def main():
     num_training_steps = args.steps * PPO_EPOCHS
     lr_scheduler = get_linear_schedule_with_warmup(
         optimizer,
-        num_warmup_steps=0,
+        num_warmup_steps=5,
         num_training_steps=num_training_steps,
     )
 
     ppo_config = PPOConfig(
         model_name=args.base_model,
-        learning_rate=1e-4,            # Lower LR for more stable training
+        learning_rate=args.lr,            # Lower LR for more stable training
         batch_size=args.batch_size,    # samples used per PPO step
         mini_batch_size=1,             # Process one sample at a time to minimize memory usage
         gradient_accumulation_steps=1,
         ppo_epochs=PPO_EPOCHS,                  # Reduced from 4 to save memory (fewer forward/backward passes)
         cliprange=0.2,
         cliprange_value=0.2,           # Clip value function updates
-        vf_coef=0.5,                   # Value function coefficient
+        vf_coef=0.3,                   # Value function coefficient
         kl_penalty="kl",
         init_kl_coef=0.2,              # Higher initial KL penalty (was 0.05)
         target_kl=0.1,                 # Lower target KL to prevent divergence (was 0.15)
@@ -332,7 +308,7 @@ def main():
         min_new_tokens=2,  # Ensure at least 2 tokens to avoid masking issues
         pad_token_id=tok.pad_token_id,
         eos_token_id=tok.eos_token_id,
-        top_k=50,  # Increased from 20 to allow more vocabulary diversity
+        top_k=30,  # Increased from 20 to allow more vocabulary diversity
         repetition_penalty=1.1,  # Penalize repetitions to avoid repeating prompt
         no_repeat_ngram_size=3,  # Prevent repeating 3-grams (helps avoid instruction repetition)
     )
