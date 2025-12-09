@@ -20,7 +20,7 @@ python -m src.RL_ppo_training \
   --y 1.0 \
   --z 1.0 \
   --steps 100 \
-  --batch_size 8 \
+  --batch_size 4 \
   --temperature 0.4 \
   --trainable_layers 4 \
   --freeze_embeddings \
