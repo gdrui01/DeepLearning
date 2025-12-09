@@ -3,7 +3,7 @@ from typing import List
 
 def constraint_score(sentences: List[str],
                      min_len: int = 4,
-                     max_len: int = 30,
+                     max_len: int = 60,
                      penalize_markdown: bool = True) -> List[float]:
     """
     Simple constraint signal: length window + lexical diversity.

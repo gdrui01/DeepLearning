@@ -16,8 +16,8 @@ from .scorers import COMETQE, LMVerifier, Sentinel
 from .constraints import constraint_score
 from .losses import method2_loss, RewardNormalizer
 
-PPO_EPOCHS = 4
-LR = 5e-5 # 1e-4
+PPO_EPOCHS = 8
+LR = 1e-4 # 1e-4 # 5e-5
 
 DEFAULT_BASE = "Qwen/Qwen3-0.6B-Base"
 
@@ -35,9 +35,9 @@ DEFAULT_BASE = "Qwen/Qwen3-0.6B-Base"
 # )
 DEFAULT_INSTRUCTION = (
     """
-    Rewrite the following sentence to be extremely difficult for machine translation using idioms, ambiguity, and wordplay while keeping it grammatically correct English. Return only plain text without any formatting, markdown, or special characters. Output only a single edited sentence:
+    Rewrite the sentence below to be extremely difficult for machine translation using idioms, ambiguity, and wordplay while keeping it grammatically correct English. Return only plain text without any formatting, markdown, or special characters. Output only a single edited sentence:
 
-    "{seed}"
+    {seed}
     """
 )
 # # Could be a better prompt
@@ -177,7 +177,7 @@ def main():
     ap.add_argument("--z", type=float, default=0.3)
     ap.add_argument("--f", type=str, default="none", choices=["relu","sigmoid","none"])
     # constraint gating
-    ap.add_argument("--constraint_threshold", type=float, default=0.5, help="Threshold for soft gating of difficulty reward (default 0.5)")
+    ap.add_argument("--constraint_threshold", type=float, default=0.1, help="Threshold for soft gating of difficulty reward (default 0.5)")
     ap.add_argument("--constraint_sharpness", type=float, default=10.0, help="Sharpness of sigmoid gate - higher = sharper transition (default 10.0)")
     # reward normalization
     ap.add_argument("--normalize_rewards", action="store_true", help="Enable reward normalization (z-score)")
@@ -219,7 +219,7 @@ def main():
                 "seed": args.seed,
                 "num_seeds": args.k,
                 "ppo_epochs": 4,
-                "init_kl_coef": 0.2,
+                "init_kl_coef": 0.4,
                 "target_kl": 0.1,
                 "cliprange": 0.2,
             }
@@ -355,9 +355,9 @@ def main():
         ppo_epochs=PPO_EPOCHS,                  # Reduced from 4 to save memory (fewer forward/backward passes)
         cliprange=0.2,
         cliprange_value=0.2,           # Clip value function updates
-        vf_coef=0.2,                   # Value function coefficient
+        vf_coef=0.5,                   # Value function coefficient
         kl_penalty="kl",
-        init_kl_coef=0.2,              # Higher initial KL penalty (was 0.05)
+        init_kl_coef=0.4,              # Higher initial KL penalty (was 0.05)
         target_kl=0.1,                 # Lower target KL to prevent divergence (was 0.15)
         adap_kl_ctrl=True,             # Adaptive KL control
         seed=args.seed,
