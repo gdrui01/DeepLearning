@@ -425,18 +425,18 @@ def main():
     # For Qwen3-0.6B: ~1.2B parameters total (2x 0.6B), with FP32 weights this is ~4.8GB
     # Plus activations, gradients, optimizer states, and generation buffers = easily 10-11GB on 1080Ti
 
-    PPO_EPOCHS = 2
+    PPO_EPOCHS = 4
     # Only optimize trainable parameters (after layer freezing)
     trainable_params_list = [p for p in policy.parameters() if p.requires_grad]
-    # optimizer = SGD(trainable_params_list, lr=args.lr)
-    optimizer = AdamW(trainable_params_list, lr=args.lr)
+    optimizer = SGD(trainable_params_list, lr=args.lr)
+    # optimizer = AdamW(trainable_params_list, lr=args.lr)
     print(f"Optimizer created with {len(trainable_params_list)} parameter groups")
-    # num_training_steps = args.steps * PPO_EPOCHS
-    # lr_scheduler = get_linear_schedule_with_warmup(
-    #     optimizer,
-    #     num_warmup_steps=5,
-    #     num_training_steps=num_training_steps,
-    # )
+    num_training_steps = args.steps * PPO_EPOCHS
+    lr_scheduler = get_linear_schedule_with_warmup(
+        optimizer,
+        num_warmup_steps=5,
+        num_training_steps=num_training_steps,
+    )
 
     ppo_config = PPOConfig(
         model_name=args.base_model,
@@ -465,7 +465,7 @@ def main():
         model=policy,
         tokenizer=tok,
         optimizer=optimizer,
-        # lr_scheduler=lr_scheduler,
+        lr_scheduler=lr_scheduler,
     )
     
     # After PPOTrainer creation, check memory again (should be ~2x due to reference model)
