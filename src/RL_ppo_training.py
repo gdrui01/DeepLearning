@@ -372,7 +372,6 @@ def main():
                 # For causal models, extract only the generated tokens (excluding the input prompt)
                 input_len = query.shape[0]
                 response = gen_output.squeeze()[input_len:]
-                print(f"Decoded prompt: {tok.decode(query, skip_special_tokens=True).strip()}")
                 """---------------------------------------------------------------------------------
                 CHECK THIS FALLBACK!!!
                 ---------------------------------------------------------------------------------"""
