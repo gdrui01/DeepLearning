@@ -466,7 +466,7 @@ def main():
                     log_dict[key] = val
 
         if use_wandb:
-            wandb.log(log_dict, step=step)
+            wandb.log(log_dict)
 
         # Extract specific stats for console logging
         ppo_loss = stats.get('ppo/loss/total', stats.get('loss', 0.0)) if isinstance(stats, dict) else 0.0
