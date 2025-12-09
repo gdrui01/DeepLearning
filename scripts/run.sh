@@ -22,4 +22,6 @@ python -m src.RL_ppo_training \
   --steps 100 \
   --batch_size 8 \
   --temperature 0.4 \
+  --trainable_layers 4 \
+  --freeze_embeddings \
   --save_dir "checkpoints/stage-alpha"

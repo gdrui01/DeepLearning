@@ -110,6 +110,110 @@ class PromptDataset(Dataset):
             "idx": idx,
         }
     
+def freeze_layers(model, trainable_layers: int, freeze_embeddings: bool = True):
+    """
+    Freeze early layers of the model, keeping only the last N transformer layers trainable.
+
+    This is beneficial for fine-tuning because:
+    - Early layers learn general language features that transfer well
+    - Later layers learn task-specific features that need adaptation
+    - Training fewer parameters reduces overfitting and memory usage
+
+    Args:
+        model: AutoModelForCausalLMWithValueHead instance
+        trainable_layers: Number of last transformer layers to keep trainable (0 = train all)
+        freeze_embeddings: Whether to freeze embedding layers
+
+    Returns:
+        tuple: (total_params, trainable_params, frozen_params)
+    """
+    if trainable_layers == 0:
+        # Train all parameters
+        for param in model.parameters():
+            param.requires_grad = True
+        total = sum(p.numel() for p in model.parameters())
+        return total, total, 0
+
+    # Get the base model (pretrained_model in AutoModelForCausalLMWithValueHead)
+    base_model = model.pretrained_model
+
+    # First, freeze all parameters
+    for param in base_model.parameters():
+        param.requires_grad = False
+
+    # Find transformer layers - handle different model architectures
+    # Common naming conventions: model.layers, model.h, transformer.h, etc.
+    transformer_layers = None
+    layer_attr_names = ['layers', 'h', 'block', 'blocks']
+
+    # Navigate to the actual model (might be wrapped)
+    inner_model = base_model
+    if hasattr(inner_model, 'model'):
+        inner_model = inner_model.model
+    if hasattr(inner_model, 'transformer'):
+        inner_model = inner_model.transformer
+
+    for attr_name in layer_attr_names:
+        if hasattr(inner_model, attr_name):
+            transformer_layers = getattr(inner_model, attr_name)
+            break
+
+    if transformer_layers is None:
+        print("Warning: Could not find transformer layers. Training all parameters.")
+        for param in base_model.parameters():
+            param.requires_grad = True
+        total = sum(p.numel() for p in model.parameters())
+        return total, total, 0
+
+    num_layers = len(transformer_layers)
+    layers_to_train = min(trainable_layers, num_layers)
+    start_layer = num_layers - layers_to_train
+
+    print(f"Model has {num_layers} transformer layers")
+    print(f"Freezing layers 0-{start_layer-1}, training layers {start_layer}-{num_layers-1}")
+
+    # Unfreeze the last N layers
+    for i, layer in enumerate(transformer_layers):
+        if i >= start_layer:
+            for param in layer.parameters():
+                param.requires_grad = True
+
+    # Unfreeze LM head (output projection) - critical for generation quality
+    if hasattr(base_model, 'lm_head'):
+        for param in base_model.lm_head.parameters():
+            param.requires_grad = True
+        print("LM head unfrozen")
+
+    # Optionally unfreeze embeddings
+    if not freeze_embeddings:
+        # Handle different embedding attribute names
+        embed_attrs = ['embed_tokens', 'wte', 'word_embeddings', 'embeddings']
+        for attr in embed_attrs:
+            if hasattr(inner_model, attr):
+                for param in getattr(inner_model, attr).parameters():
+                    param.requires_grad = True
+                print(f"Embeddings ({attr}) unfrozen")
+                break
+
+    # The value head (added by TRL) should always be trainable
+    if hasattr(model, 'v_head'):
+        for param in model.v_head.parameters():
+            param.requires_grad = True
+        print("Value head unfrozen")
+
+    # Count parameters
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    frozen_params = total_params - trainable_params
+
+    print(f"\nParameter summary:")
+    print(f"  Total parameters: {total_params:,}")
+    print(f"  Trainable parameters: {trainable_params:,} ({100*trainable_params/total_params:.1f}%)")
+    print(f"  Frozen parameters: {frozen_params:,} ({100*frozen_params/total_params:.1f}%)")
+
+    return total_params, trainable_params, frozen_params
+
+
 class huggingfaceDataset(Dataset):
     def __init__(self, hf_dataset, tokenizer):
         """
@@ -154,6 +258,9 @@ def main():
     ap.add_argument("--z", type=float, default=0.3) # Weight on verifier
     ap.add_argument("--f", type=str, default="none", choices=["relu","sigmoid","none"])
     ap.add_argument("--seed", type=int, default=42)
+    # layer freezing
+    ap.add_argument("--trainable_layers", type=int, default=4, help="Number of last transformer layers to train (0=train all, default=4)")
+    ap.add_argument("--freeze_embeddings", action="store_true", help="Freeze embedding layers (recommended for partial fine-tuning)")
     # wandb
     ap.add_argument("--wandb_project", type=str, default="mt-breaker-ppo")
     ap.add_argument("--wandb_run_name", type=str, default=None)
@@ -192,6 +299,8 @@ def main():
                 "init_kl_coef": 0.2,
                 "target_kl": 0.1,
                 "cliprange": 0.2,
+                "trainable_layers": args.trainable_layers,
+                "freeze_embeddings": args.freeze_embeddings,
             }
         )
 
@@ -251,7 +360,29 @@ def main():
     if torch.cuda.is_available():
         policy = policy.to(device)
         print(f"GPU memory after policy load: {torch.cuda.memory_allocated(device)/1e9:.2f} GB allocated, {torch.cuda.memory_reserved(device)/1e9:.2f} GB reserved")
-    
+
+    # Apply layer freezing for partial fine-tuning
+    # This keeps early layers frozen (preserving general language knowledge)
+    # while only training the last few layers for task adaptation
+    print("\n" + "="*80)
+    print("APPLYING LAYER FREEZING FOR PARTIAL FINE-TUNING")
+    print("="*80)
+    total_params, trainable_params, frozen_params = freeze_layers(
+        policy,
+        trainable_layers=args.trainable_layers,
+        freeze_embeddings=args.freeze_embeddings
+    )
+    print("="*80 + "\n")
+
+    # Log parameter counts to wandb
+    if use_wandb:
+        wandb.config.update({
+            "total_params": total_params,
+            "trainable_params": trainable_params,
+            "frozen_params": frozen_params,
+            "trainable_ratio": trainable_params / total_params if total_params > 0 else 1.0,
+        })
+
     # Enable gradient checkpointing to save memory during training
     if hasattr(policy.pretrained_model, 'gradient_checkpointing_enable'):
         policy.pretrained_model.gradient_checkpointing_enable()
@@ -262,7 +393,10 @@ def main():
     # Plus activations, gradients, optimizer states, and generation buffers = easily 10-11GB on 1080Ti
 
     PPO_EPOCHS = 2
-    optimizer = SGD(policy.parameters(), lr=5e-5)
+    # Only optimize trainable parameters (after layer freezing)
+    trainable_params_list = [p for p in policy.parameters() if p.requires_grad]
+    optimizer = SGD(trainable_params_list, lr=5e-5)
+    print(f"Optimizer created with {len(trainable_params_list)} parameter groups")
     num_training_steps = args.steps * PPO_EPOCHS
     lr_scheduler = get_linear_schedule_with_warmup(
         optimizer,
