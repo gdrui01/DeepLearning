@@ -30,6 +30,10 @@ def read_seeds(path: str, k: int | None = None) -> List[str]:
         sents = [l.strip() for l in f if l.strip()]
     return sents[:k] if k else sents
 
+def filter_by_word_count(input):
+    word_count = len(input['text'].split())
+    return word_count <= 200
+
 
 @dataclass
 class Method2Rewarder:
@@ -201,7 +205,9 @@ def main():
     # ---- data ----
     if args.dataset:
         hs_dataset = load_dataset(args.dataset, num_proc=4, split = "train")
+        hs_dataset = hs_dataset.filter(filter_by_word_count, num_proc=4)
         dataset = huggingfaceDataset(hs_dataset, tok)
+
     else :
         dataset = PromptDataset(read_seeds(args.seeds, k=args.k), tok)
 
