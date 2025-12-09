@@ -10,9 +10,9 @@ import wandb
 from transformers import AutoTokenizer, get_linear_schedule_with_warmup, get_constant_schedule_with_warmup
 from trl import PPOConfig, PPOTrainer, AutoModelForCausalLMWithValueHead
 
-from scorers import COMETQE, LMVerifier, Sentinel
-from constraints import constraint_score
-from losses import method2_loss
+from .scorers import COMETQE, LMVerifier, Sentinel
+from .constraints import constraint_score
+from .losses import method2_loss
 
 from datasets import load_dataset
 from torch.utils.data import DataLoader
