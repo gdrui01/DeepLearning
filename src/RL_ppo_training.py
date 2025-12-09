@@ -214,7 +214,7 @@ def main():
     train_loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, num_workers=2)
 
     # ---- external scorers ----
-    qe = COMETQE(accelerator_preference=args.comet_accelerator)
+    qe = Sentinel()
     vf = LMVerifier(device=args.lm_verifier_device)
 
     rewarder = Method2Rewarder(
