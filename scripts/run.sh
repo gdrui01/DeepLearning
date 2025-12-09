@@ -3,11 +3,11 @@
 #SBATCH --account=deep_learning
 #SBATCH --output=logs/mtbreaker_%j.out
 #SBATCH --job-name=mtbreaker
-#SBATCH --gpus 1080ti:1
+#SBATCH --gpus 5060ti:1
 
 
 . /etc/profile.d/modules.sh
-module add cuda/12.6
+module add cuda/12.8  # Blackwell (sm_120) requires CUDA 12.8+
 
 source "$HOME/venvs/mtbreaker/bin/activate"
 cd "/work/scratch/mbehanzin/DeepLearning/"
