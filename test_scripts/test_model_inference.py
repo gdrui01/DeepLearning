@@ -1,12 +1,25 @@
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from sentinel_metric import download_model as sentinel_download_model, load_from_checkpoint as sentinel_load_from_checkpoint
+import numpy as np
 
 import torch
 import gc
 import argparse
 from pathlib import Path
 
+
 torch.cuda.empty_cache()
 gc.collect()
+
+class Sentinel:
+    def __init__(self):
+        ckpt = sentinel_download_model("Prosho/sentinel-src-25")
+        self.model = sentinel_load_from_checkpoint(ckpt)
+
+    def difficulty(self, sentences):
+        data = [{"src": s} for s in sentences]
+        out = self.model.predict(data, batch_size = 8, gpus = 1)
+        return [1.0 - score for score in out.scores]
 
 # Parse command line arguments
 parser = argparse.ArgumentParser(description="Test model inference with optional checkpoint loading")
@@ -37,69 +50,44 @@ else:
     print(f"Loading base model: {model_name}")
     model_path = model_name
 
-# load the tokenizer and the model
 tokenizer = AutoTokenizer.from_pretrained(model_name)
-# tokenizer.pad_token = tokenizer.eos_token # necessary for gpt2
+
 model = AutoModelForCausalLM.from_pretrained(
     model_path,
     dtype="auto",
     device_map="auto"
 )
+qe = Sentinel()
 
-# prepare the model input
+seed = "He read a novel."
+
 prompt = (
     """
     Rewrite the following sentence to be extremely difficult for machine translation using idioms, ambiguity, and wordplay while keeping it grammatically correct English. Return only plain text without any formatting, markdown, or special characters. Output only a single edited sentence:
 
-    "He read a novel."
+    {seed}
     """
 )
 
-# prompt = """Rewrite this sentence to be extremely difficult for machine translation using idioms, ambiguity, and wordplay, while keeping it grammatically correct English: "They walked towards the park's entrance."
-
-# Only return the single edited sentence."""
-# prompt = """Easy to translate sentence: "It was a rainy day."
-#         Hard to translate sentence:
-# """
-# messages = [
-#     {"role": "user", "content": prompt}
-# ]
-# text = tokenizer.apply_chat_template(
-#     messages,
-#     tokenize=False,
-#     add_generation_prompt=True,
-#     enable_thinking=False # Switches between thinking and non-thinking modes. Default is True.
-# )
 model_inputs = tokenizer(
-    prompt,
+    prompt.format(seed=seed),
     return_tensors="pt",
-    # padding=True,
-    # truncation=True,
-    # max_length=1024
 ).to(model.device)
 
-# conduct text completion
 print("Prompting model...")
 generated_ids = model.generate(
     **model_inputs,
-    # pad_token_id=tokenizer.pad_token_id,
-    # eos_token_id=tokenizer.eos_token_id,
-    # do_sample=True,
     # temperature=0.4,
-    max_new_tokens=45 # 1024 # 32768
+    max_new_tokens=45
 )
 output_ids = generated_ids[0][len(model_inputs.input_ids[0]):].tolist() 
 
-# # parsing thinking content
-# try:
-#     # rindex finding 151668 (</think>)
-#     index = len(output_ids) - output_ids[::-1].index(151668)
-# except ValueError:
-#     index = 0
-
-# thinking_content = tokenizer.decode(output_ids[:index], skip_special_tokens=True).strip("\n")
-# content = tokenizer.decode(output_ids[index:], skip_special_tokens=True).strip("\n")
 content = tokenizer.decode(output_ids, skip_special_tokens=True).strip("\n")
-
-# print("thinking content:", thinking_content)
+diff_seed = qe.difficulty([seed])
+diff_cont = qe.difficulty([content])
+delta = np.array(diff_cont) - np.array(diff_seed)
+print("seed:", seed)
 print("content:", content)
+print("seed difficulty:", diff_seed)
+print("content difficulty:", diff_cont)
+print("difficulty delta:", delta)
