@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from typing import List
 import numpy as np
 import torch
-from torch.optim import SGD
+from torch.optim import SGD, AdamW
 from tqdm import trange
 import wandb
 
@@ -395,14 +395,15 @@ def main():
     PPO_EPOCHS = 2
     # Only optimize trainable parameters (after layer freezing)
     trainable_params_list = [p for p in policy.parameters() if p.requires_grad]
-    optimizer = SGD(trainable_params_list, lr=5e-5)
+    # optimizer = SGD(trainable_params_list, lr=args.lr)
+    optimizer = AdamW(trainable_params_list, lr=args.lr)
     print(f"Optimizer created with {len(trainable_params_list)} parameter groups")
-    num_training_steps = args.steps * PPO_EPOCHS
-    lr_scheduler = get_linear_schedule_with_warmup(
-        optimizer,
-        num_warmup_steps=5,
-        num_training_steps=num_training_steps,
-    )
+    # num_training_steps = args.steps * PPO_EPOCHS
+    # lr_scheduler = get_linear_schedule_with_warmup(
+    #     optimizer,
+    #     num_warmup_steps=5,
+    #     num_training_steps=num_training_steps,
+    # )
 
     ppo_config = PPOConfig(
         model_name=args.base_model,
@@ -431,7 +432,7 @@ def main():
         model=policy,
         tokenizer=tok,
         optimizer=optimizer,
-        lr_scheduler=lr_scheduler,
+        # lr_scheduler=lr_scheduler,
     )
     
     # After PPOTrainer creation, check memory again (should be ~2x due to reference model)
