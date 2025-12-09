@@ -58,14 +58,27 @@ def constraint_score(
         has_complexity = any(tok.lower() in complex_markers for tok in toks)
         complexity_score = 1.0 if has_complexity else 0.8
 
-        w_len, w_div, w_char, w_comp = 3, 3, 2, 2 # we can tune these weights
+        # 5) single sentence constraint: penalize if not exactly one sentence
+        # Count sentences by finding sentence-ending punctuation (., !, ?)
+        sentence_endings = re.findall(r'[.!?]', s)
+        num_sentences = len(sentence_endings)
+        if num_sentences == 1:
+            sentence_count_score = 1.0
+        else:
+            # Penalize based on deviation from 1 sentence
+            deviation = abs(num_sentences - 1)
+            k = 0.5  # tunable: controls penalty strength
+            sentence_count_score = 1.0 / (1.0 + deviation / k)
+
+        w_len, w_div, w_char, w_comp, w_sent = 3, 3, 2, 2, 3 # we can tune these weights
         score = ( # during training we can look for which of the constraints make sense and if we need all of them
             w_len * len_score +
             w_div * div_score +
             w_char * char_score +
-            w_comp * complexity_score
-        ) / (w_len + w_div + w_char + w_comp)
-        print(f"len_score: {len_score}, div_score: {div_score}, char_score: {char_score}, complexity_score: {complexity_score}")
+            w_comp * complexity_score +
+            w_sent * sentence_count_score
+        ) / (w_len + w_div + w_char + w_comp + w_sent)
+        print(f"len_score: {len_score}, div_score: {div_score}, char_score: {char_score}, complexity_score: {complexity_score}, sentence_count_score: {sentence_count_score}")
 
         scores.append(score)
 
