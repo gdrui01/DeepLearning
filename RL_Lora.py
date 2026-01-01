@@ -174,6 +174,15 @@ train_dataloader = DataLoader(
 )
 
 wandb.init(project=config.tracker_project_name, config=config.to_dict())
+if wandb.run and wandb.run.name:
+    run_name = wandb.run.name
+else:
+    run_name = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+run_checkpoint_dir = os.path.join("checkpoints", run_name)
+print(f"Checkpoints for this run will be saved to: {run_checkpoint_dir}")
+
+
 
 ppo_trainer = PPOTrainer(
     config,
@@ -275,13 +284,13 @@ for step, batch in enumerate(train_dataloader):
     print(f"Step {step}: Mean Reward: {torch.stack(rewards).mean().item():.4f} | Success: {custom_metrics['gatekeeper/success_rate']:.2%}")
     
     if step % 50 == 0 and step > 0:
-        save_path = f"checkpoints/step_{step}"
-    
-        os.makedirs(save_path, exist_ok=True)
+        step_save_path = os.path.join(run_checkpoint_dir, f"step_{step}")
         
-        print(f"Saving checkpoint to {save_path}...")
-        model.save_pretrained(save_path)
-        tokenizer.save_pretrained(save_path)
+        os.makedirs(step_save_path, exist_ok=True)
+        
+        print(f"Saving checkpoint to {step_save_path}...")
+        model.save_pretrained(step_save_path)
+        tokenizer.save_pretrained(step_save_path)
 
 
 model.save_pretrained("mt-breaker")
