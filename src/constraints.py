@@ -1,27 +1,55 @@
 import re
+from collections import Counter
 from typing import List
 
-def constraint_score(sentences: List[str],
-                     min_len: int = 4,
-                     max_len: int = 1024) -> List[float]:
+def constraint_score(sentences: List[str], ref_sentences: List[str]) -> List[dict]:
     """
-    Simple constraint signal: length window + lexical diversity.
-    Returns higher-is-better scores.
+    Returns a dict of sub-scores for analysis, rather than a single float.
+    Pass 'original_text' as ref_sentences to compare lengths.
     """
-    scores = []
-    for s in sentences:
+    results = []
+    
+    for s, ref in zip(sentences, ref_sentences):
+        # Basic Tokenization
         toks = re.findall(r"\w+|\S", s)
         alpha = [t for t in toks if re.match(r"^[A-Za-z]+$", t)]
-        n = len(toks)
-        length_ok = (min_len <= n <= max_len)
-        uniq_ratio = len(set(w.lower() for w in alpha)) / max(1, len(alpha))
-        # base on diversity around 0.5, add length bonus
-        score = (uniq_ratio - 0.5) + (0.5 if length_ok else -0.5)
-        score = min(1.0, max(0.0, score)) # making sure the score is between 0 and 1
-        scores.append(score)
-    return scores
+        n = len(alpha)
+        
+        # 0. Fail safe for empty strings
+        if n == 0:
+            results.append({'len_score': 0, 'char_score': 0, 'total': 0})
+            continue
 
-if __name__ == "__main__":
-    good_score = constraint_score(["The cross-eyed cat sat on the mat, patiently waiting for her owner to return."])
-    bad_score = constraint_score(["I am going out."])
-    print(f"Good score: {good_score}, Bad score: {bad_score}")
+        # 1. Relative Length Score (Better than absolute min/max)
+        # We want the rewrite to be roughly the same length as the original
+        ref_len = len(re.findall(r"[A-Za-z]+", ref))
+        ratio = n / max(1, ref_len)
+        
+        # Penalty if length matches poorly (e.g. < 50% or > 200% of original)
+        if 0.5 <= ratio <= 2.0:
+            len_score = 1.0
+        else:
+            len_score = 0.0 
+
+        # 2. Diversity / Repetition
+        counts = Counter(w.lower() for w in alpha)
+        # Check if any single word appears more than 40% of the time (repetition loop)
+        most_common_ratio = counts.most_common(1)[0][1] / n
+        if most_common_ratio > 0.4 and n > 5:
+            div_score = 0.0 # Strict fail
+        else:
+            div_score = 1.0
+
+        # 3. Character Sanity
+        letters = sum(c.isalpha() for c in s)
+        nonspace = sum(not c.isspace() for c in s)
+        char_ratio = letters / max(1, nonspace)
+        char_score = 1.0 if char_ratio > 0.7 else 0.0 # Thresholding is safer
+
+        results.append({
+            'len_score': len_score,
+            'div_score': div_score,
+            'char_score': char_score
+        })
+        
+    return results

@@ -222,8 +222,8 @@ class LMVerifier:
             s = max(0.0, min(1.0, raw))
 
             # included threshold map to not penalize (we could have a sentence that makes sense but is hard to translate which we don't want to penalize)
-            if s >= 0.3:
-                s = 1.0
+            #if s >= 0.3:
+            #    s = 1.0
             scores.append(s)
 
         return scores
