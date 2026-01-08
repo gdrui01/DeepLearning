@@ -11,8 +11,8 @@ from sentence_transformers import SentenceTransformer, util
 
 from sentinel_metric import download_model as sentinel_download_model
 from sentinel_metric import load_from_checkpoint as sentinel_load_from_checkpoint
-from src.constraints import constraint_score
-from src.scorers import LMVerifier
+from constraints import constraint_score
+from scorers import LMVerifier
 import logging
 import warnings
 from datetime import datetime
@@ -39,7 +39,7 @@ def calculate_final_reward(
     constraints: dict
 ) -> tuple[float, str]:
     # Gatekeepers - keep meaning
-    if semantic_sim < 0.65: # todo tune threshold
+    if semantic_sim < 0.70: # todo tune threshold
         return -2.0, "fail_semantic"
         
     # Length/Sanity Constraints
@@ -56,7 +56,7 @@ def calculate_final_reward(
         
     # Core Reward (Sentinel Difference)
     # We want to maximize difficulty increase
-    difficulty_reward = sentinel_diff * 15.0 # Todo maybe tune multiplier
+    difficulty_reward = sentinel_diff * 10.0 # Todo maybe tune multiplier
     
     total_reward = difficulty_reward + fluency_penalty
     return np.clip(total_reward, -5.0, 5.0), status
@@ -75,8 +75,9 @@ class Sentinel:
 
 config = PPOConfig(
     model_name="meta-llama/Llama-3.2-3B-Instruct", #Todo switch to 7B at some point
-    learning_rate=1e-6, # Todo maybe too large
-    batch_size=64,
+    #model_name="meta-llama/Meta-Llama-3.1-8B-Instruct",
+    learning_rate=5e-7,
+    batch_size=32,
     mini_batch_size=4,
     gradient_accumulation_steps=4,
     optimize_cuda_cache=True,
@@ -195,8 +196,13 @@ ppo_trainer = PPOTrainer(
 
 
 generation_kwargs = {
-    "min_length": 5, "top_k": 0.0, "top_p": 0.9, "do_sample": True,
-    "pad_token_id": tokenizer.eos_token_id, "max_new_tokens": 128,
+    "min_length": 5,
+    "top_k": 0.0,
+    "top_p": 0.85,
+    "do_sample": True,
+    "pad_token_id": tokenizer.eos_token_id,
+    "max_new_tokens": 128,
+    "temperature": 0.7,
 }
 
 LOG_FREQ = 10
@@ -214,7 +220,7 @@ for step, batch in enumerate(train_dataloader):
     
     response_tensors = ppo_trainer.generate(
         query_tensors, 
-        return_prompt=False, 
+        return_prompt=False,
         **generation_kwargs
     )
     raw_responses = tokenizer.batch_decode(response_tensors, skip_special_tokens=True)
